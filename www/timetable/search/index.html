@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+<title>AWS Timetables - Search</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+<link rel='styleSheet' href='../../style.css' type="text/css" media='screen' />
+<link rel='styleSheet' href='../../spinner.css' type="text/css" media='screen' />
+
+<script src="http://ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
+<script src="/aws/timetable/search/search.js"></script> 
+
+<script src="/aws/sprintf.js"></script> 
+<script src="/aws/sorttable.js"></script> 
+
+</head>
+
+<body>
+
+<div class='form'>
+<form method="post" id='cerberus'>
+<input type='hidden' name='action' value='timetables'></input>
+
+<table>
+<tr>
+<td >
+	<label for="game_id" id="game_id-label">Game</label>
+	<select id="game_id" name="game_id" title="AWS Game. This is a required field">
+	</select>
+</td>
+</tr>
+
+<tr>
+<td>
+	<label for="base_airport_iata" id="base_airport_iata-label">Base</label>
+	<select id="base_airport_iata" name="base_airport_iata">
+	</select>
+</td>
+</tr>
+
+<tr>
+<td>
+	<label for="dest_airport_iata" id="dest_airport_iata-label">Destination</label>
+	<select id="dest_airport_iata" name="dest_airport_iata">
+	</select>
+</td>
+</tr>
+
+</table>
+
+
+</form>
+</div>
+
+<br />
+
+<div style='vertical-align: top;'>
+<div id='timetable_view' class='sizer'>
+
+<form id='charybdis' name='charybdis'>
+<input type='hidden' name='action' value='conflicts'></input>
+<table class='standard nowrap sortable' id='ttFormView' >
+<thead>
+<tr>
+<td>Base</td>
+<td>Dest</td>
+<td width='90px'>A/C</td>
+<td width='200px'>Fleet Type</td>
+<td>Flight<br>#</td>
+<td>O/B<br>Dep</td>
+<td>O/B<br>Arr</td>
+<td>I/B<br>Dep</td>
+<td>I/B<br>Arr</td>
+</tr>
+</thead>
+
+<tbody>
+</tbody>
+
+</table>
+</form>
+
+
+</div> 
+
+</div>
+
+<!-- timetable  -->
+<!--
+<div class='spinnerPanel' id='spinner'>
+<div class='centerPanel'>
+<div id="floatingCirclesG">
+<div class="f_circleG" id="frotateG_01">
+</div>
+<div class="f_circleG" id="frotateG_02">
+</div>
+<div class="f_circleG" id="frotateG_03">
+</div>
+<div class="f_circleG" id="frotateG_04">
+</div>
+<div class="f_circleG" id="frotateG_05">
+</div>
+<div class="f_circleG" id="frotateG_06">
+</div>
+<div class="f_circleG" id="frotateG_07">
+</div>
+<div class="f_circleG" id="frotateG_08">
+</div>
+</div>
+-->
+</div>
+</div>
+
+</body>
+</html>
