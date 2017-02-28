@@ -1,9 +1,10 @@
 from datetime import timedelta
 from nptime import nptime
 from nptools import str_to_timedelta, str_to_nptime, TimeIsInWindow
-from copy import deepcopy
+from datasources import DataSource
 import random
 from functools import reduce
+import bitstring
 
 
 class FleetType:
@@ -97,7 +98,8 @@ class Flight:
     def getOutbound(self):
         return (reduce(lambda x, y: x+y, 
             map(lambda x: x['sector_length'], self.sectors["outbound"])) 
-            + (len(self.sectors["outbound"]) - 1) * self.fleet_type.min_turnaround)
+            + (len(self.sectors["outbound"]) - 1) * 
+              self.fleet_type.min_turnaround)
 
     def getInbound(self):
         return (reduce(lambda x, y: x+y, 
@@ -116,6 +118,151 @@ class Flight:
             self.dest_airport.iata_code, self.fleet_type.fleet_icao_code
             )
 
+class FlightManager:
+    def __init__(self, source):
+        if not isinstance(source, DataSource):
+            raise Exception("No valid data source provided")
+            
+        self.source = source
+        self.game_id = source.game_id
+        self.flights = {}
+        self.airports = {}
+        self.fleet_types = {}
+        self.MTXFlights = {}
+        
+        self.getFlights()
+        print(self.flights)
+        
+    def getFlights(self):
+ 
+        airport_fields = [
+            'dest_airport_iata', 'iata_code', 'icao_code', 'city',
+            'airport_name',
+            'timezone', 'curfew_start', 'curfew_finish',
+        ]
+        fleet_type_fields = [
+            'fleet_type_id', 'description', 'min_turnaround',
+            'fleet_icao_code',
+            'ops_turnaround',
+        ]
+        flight_fields = [
+            'flight_number', 'fleet_type_id', 'outbound_length',
+            'inbound_length',
+            'turnaround_length', 'distance_nm', 'sectors'
+        ]
+
+        self.flight_lookup = {}
+
+
+        data = self.source.getBases()
+       # print("bases:\n{}".format(data))
+
+        for row in data:
+            self.airports[row['iata_code']] = Airport(
+                {key: value for key, value in row.items() if
+                 key in airport_fields}
+            )
+
+        if len(self.airports.keys()) == 0:
+            return False
+
+        # destination airports
+        data = self.source.getDestinations()
+        # print("airports:\n{}".format(data))
+
+        for row in data:
+            if row['iata_code'] not in self.airports:
+                self.airports[row['iata_code']] = Airport(
+                    {key: value for key, value in row.items() if
+                     key in airport_fields}
+                )
+
+        # fleet_types
+        data = self.source.getFleets()
+
+        # print("fleets:\n{}".format(data))
+
+        for row in data:
+            row['fleet_icao_code'] = row['icao_code']
+            self.fleet_types[row['fleet_type_id']] = FleetType({
+                                                       key: value
+                                                       for
+                                                       key, value
+                                                       in
+                                                       row.items()
+                                                       if
+                                                       key in fleet_type_fields
+                                                                   })
+
+        # flights
+        data = self.source.getFlights()
+        # print("flights:\n{}".format(data))
+
+        for row in data:
+            # print(row)
+            base_airport_iata = row['base_airport_iata']
+            fleet_type_id = row['fleet_type_id']
+            flight_number = row['flight_number']
+
+            # self.flights[row['base_airport_iata']]
+            if base_airport_iata not in self.flights:
+                self.flights[base_airport_iata] = {}
+
+            # self.flights[row['base_airport_iata']][row['fleet_type_id']]
+            if fleet_type_id not in self.flights[base_airport_iata]:
+                self.flights[base_airport_iata][fleet_type_id] = (
+                    FlightCollection(self.airports[base_airport_iata])
+                )
+
+            # replace IATA codes of sector airports with pointer to objects
+            if 'sectors' in row and len(row['sectors']) > 0:
+                # print(row['sectors'])
+                # for dirn in ("outbound", "inbound"):
+                #    for s in row['sectors'][dirn]:
+                #        s['start_airport'] = self.airports[s['start_airport_iata']]
+                #        s['end_airport'] = self.airports[s['end_airport_iata']]
+                for s in row['sectors']:
+                    s['start_airport'] = self.airports[s['start_airport_iata']]
+                    s['end_airport'] = self.airports[s['end_airport_iata']]
+            # get the FlightCollection for this base/fleet-type pair
+            flightCln = self.flights[base_airport_iata][fleet_type_id]
+
+            # get flight details
+            f = {key: value for key, value in row.items()
+                 if key in flight_fields
+                 }
+
+            f['base_airport'] = self.airports[row['base_airport_iata']]
+            f['dest_airport'] = self.airports[row['dest_airport_iata']]
+
+            f['fleet_type'] = self.fleet_types[fleet_type_id]
+
+            # permit same flight number with different fleet_type_id
+            if not flight_number in self.flight_lookup:
+                self.flight_lookup[flight_number] = {}
+            self.flight_lookup[flight_number][fleet_type_id] = Flight(f)
+
+            # only flights with desired fleet_type_id added to collection
+            flightCln.append(self.flight_lookup[flight_number][fleet_type_id])
+
+        if len(self.flight_lookup.keys()) == 0:
+            return False
+
+        # add maintenance flights to each FlightCollection
+        for base_airport_iata in self.flights:
+            self.MTXFlights[base_airport_iata] = {}
+            for fleet_type_id in self.flights[base_airport_iata]:
+                mtx = self.MTXFlights[base_airport_iata][fleet_type_id] = (
+                    MaintenanceCheckA(self.airports[base_airport_iata],
+                                      self.fleet_types[fleet_type_id])
+                )
+                flightCln = self.flights[base_airport_iata][fleet_type_id]
+                flightCln.append(mtx)
+
+        return True
+        
+        
+        
 class MaintenanceCheckA(Flight):
     """weekly A-check of duration 5 hours"""
     def __init__(self, base_airport, fleet_type):
@@ -143,21 +290,50 @@ class MaintenanceCheckA(Flight):
         return self.inbound_length
         
 class FlightCollection:
-    def __init__(self, shuffle =True):
+    def __init__(self, base_airport, shuffle =True):
+        self.base_airport = base_airport        
         self.shuffle = shuffle
-        self.flights = []
-        self.deleted = []
+        self.flights = [None] # location 0 reserved for MTX
+        self.deleted = [False] # location 0 reserved for MTX
+        self.indexMap = dict()
+        self.indexMap['MTX'] = 0
+        self.durationIndex = []
         self.MTXEntry = None
         
     def append(self, f):
-        if not isinstance(f, Flight):
+        if not isinstance(f, Flight) or f is None:
             raise Exception("Bad flight appended to FlightCollection")
             
-        self.flights.append(f)
-        self.deleted.append(False)
         if (f.isMaintenance):
             self.MTXEntry = f
+            self.flights[0] = f
+        else:
+            self.flights.append(f)
+            self.deleted.append(False)
+            self.indexMap[f.flight_number] = len(self.flights) - 1
 
+    def buildDurationIndex(self):
+        """index of flights in descending order"""
+        self.durationIndex = sorted(range(len(self.flights)),
+                                    key=lambda x: self.flights[x].length,
+                                    reverse=True)
+        
+    def getShorterFlight(self, fltLength, random=False):
+        if fltLength is None or not isinstance(fltLength, timedelta):
+            return None
+            
+        if random:
+            vals = range(0, len(self.flights))
+        else:
+            vals = self.durationIndex
+        
+        for i in vals:
+            if not self.deleted[i] and self.flights[i].length <= fltLength:
+                return self.flights[i]
+            
+        return None
+            
+        
     def deleteByFlightNumber(self, flight_number):
         for f in self.flights:
             if f.flight_number == flight_number:
@@ -192,6 +368,15 @@ class FlightCollection:
         for i in range(0, len(self.deleted)):
             self.deleted[i] = False
             
+    def getIndex(self, flight_number):
+        return self.indexMap.get(flight_number)
+            
+    def __getitem__(self, key):
+        if key in range(0, len(self.flights)):
+            return self.flights[key]
+        else:
+            return None
+            
     def __len__(self):
         length = 0
         for x in range(0, len(self.flights)):
@@ -201,17 +386,20 @@ class FlightCollection:
     
     def total_time(self):
         out = timedelta(0, 0)
-        for x in range(0, len(self.flights)):
+        for x in range(1, len(self.flights)):
             if not self.deleted[x]:
                 out += (self.flights[x].outbound_length + 
                 2 * self.flights[x].turnaround_length + 
                 self.flights[x].inbound_length) 
         return out
+        
+    def toBitstring(self):
+        return ~(bitstring.Bits(self.deleted))
             
     def status(self):
         available = []
         deleted = []
-        for i in range(0, len(self.flights)):
+        for i in range(1, len(self.flights)):
             if self.deleted[i]:
                 deleted.append(self.flights[i].flight_number)
             else:
@@ -220,6 +408,9 @@ class FlightCollection:
         return "Available: {}\nDeleted: {}".format(
                 " ".join(available), " ".join(deleted)
                 )
+                
+    def setShuffle(self, status):
+        self.shuffle = status
                 
         
 class FlightCollectionIter:

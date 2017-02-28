@@ -1,17 +1,13 @@
 #!/usr/bin/python3
 
-from flights import Airport, Flight, FleetType, FlightCollection, \
-    MaintenanceCheckA
-from timetables import Timetable, TimetableEntry, TimetableManager, OpTimes
+from flights import FlightManager
+from timetables import Timetable, TimetableEntry, OpTimes
+from TimetableManager import TimetableManager
 from mysql import connector
-from mysql.connector.errors import Error
-import pymysql
-import requests
 import random
-import simplejson as json
 from threading import Timer
 from datetime import timedelta
-from nptools import str_to_timedelta, str_to_nptime, timedelta_to_hhmm
+from nptools import str_to_nptime, timedelta_to_hhmm
 from nptime import nptime
 import pdb
 
@@ -67,314 +63,36 @@ class ThreadController:
 
 
 class TimetableBuilder:
-    def __init__(self, game_id, use_rejected=False, shuffle=True,
-                 db_user='mysql',
-                 db_pass='password', db_host='localhost', db_name='airwaysim',
-                 db_port=3306):
-        # all timetables at all bases
-        # stored as timetables[base_airport_iata][fleet_type_id]
-        self.timetables = {}
+    def __init__(self, flManager, ttManager, use_rejected=False, shuffle=True):
+
+        if not isinstance(flManager, FlightManager):
+            raise Exception("No valid FlightManager provided")
+        self.flManager = flManager
+
+        if not isinstance(ttManager, TimetableManager):
+            raise Exception("No valid TimetableManager provided")
+        self.ttManager = ttManager
+        
+        if self.flManager.source != self.ttManager.source:
+            raise Exception(
+                "Differing sources between FlightManager/TimetableManager"
+            )
+             
 
         # all flights at all bases
         # stored as flights[base_airport_iata][fleet_type_id]
-        self.flights = {}
-        self.airports = {}
-        self.fleet_types = {}
-        self.ttManager = TimetableManager()
+        self.flights = self.flManager.flights
+        self.airports = self.flManager.airports
+        self.fleet_types = self.flManager.fleet_types
+        self.timetables = self.ttManager.timetables
         self.rejected = []
         self.use_rejected = use_rejected
-        self.MTXFlights = {}
         self.shuffle_flights = shuffle
-        self.game_id = game_id
-
-        self.db_user = db_user
-        self.db_pass = db_pass
-        self.db_host = db_host
-        self.db_name = db_name
-        self.db_name = db_name
-        self.db_port = db_port
-
-        if not self.getFlights():
-            raise Exception("Unable to load flights")
-        else:
-            print("Loaded {} flights".format(len(self.flight_lookup.keys())))
-
-        if not self.getTimetables():
-            raise Exception("Unable to load timetables")
-        else:
-            print("Loaded timetables from {} bases".format(
-                len(self.timetables.keys())))
+        self.game_id = self.flManager.source.game_id
 
     def refresh(self):
         pass
 
-    def getFlights(self):
-        #cnx = pymysql.connect(user=self.db_user, password=self.db_pass,
-        #                      host=self.db_host, db=self.db_name)
-        #cursor = cnx.cursor(pymysql.cursors.DictCursor)
-
-        airport_fields = [
-            'dest_airport_iata', 'iata_code', 'icao_code', 'city',
-            'airport_name',
-            'timezone', 'curfew_start', 'curfew_finish',
-        ]
-        fleet_type_fields = [
-            'fleet_type_id', 'description', 'min_turnaround',
-            'fleet_icao_code',
-            'ops_turnaround',
-        ]
-        flight_fields = [
-            'flight_number', 'fleet_type_id', 'outbound_length',
-            'inbound_length',
-            'turnaround_length', 'distance_nm', 'sectors'
-        ]
-
-        self.flight_lookup = {}
-
-        # base airports
-        uri = "http://localhost/aws/app/v1/games/" + self.game_id + "/bases"
-
-        r = requests.get(uri)
-        if r.status_code != 200:
-            return False
-
-        data = json.loads(r.text)['airports']
-        # print("bases:\n{}".format(data))
-
-        for row in data[0]['bases']:
-            self.airports[row['iata_code']] = Airport(
-                {key: value for key, value in row.items() if
-                 key in airport_fields}
-            )
-
-        if len(self.airports.keys()) == 0:
-            return False
-
-        # destination airports
-        uri = "http://localhost/aws/app/v1/games/" + self.game_id + "/airports"
-        r = requests.get(uri)
-        if r.status_code != 200:
-            return False
-
-        data = json.loads(r.text)['airports']
-        # print("airports:\n{}".format(data))
-
-        for row in data[0]['destinations']:
-            if row['iata_code'] not in self.airports:
-                self.airports[row['iata_code']] = Airport(
-                    {key: value for key, value in row.items() if
-                     key in airport_fields}
-                )
-
-        # fleet_types
-        uri = "http://localhost/aws/app/v1/games/" + self.game_id + "/fleets"
-        r = requests.get(uri)
-        if r.status_code != 200:
-            return False
-
-        data = json.loads(r.text)['fleets']
-        # print("fleets:\n{}".format(data))
-
-        for row in data:
-            row['fleet_icao_code'] = row['icao_code']
-            self.fleet_types[row['fleet_type_id']] = FleetType({
-                                                                   key: value
-                                                                   for
-                                                                   key, value
-                                                                   in
-                                                                   row.items()
-                                                                   if
-                                                                   key in fleet_type_fields
-                                                                   })
-
-        # flights
-        uri = "http://localhost/aws/app/v1/games/" + self.game_id + "/flights/basic"
-        r = requests.get(uri)
-        if r.status_code != 200:
-            return False
-
-        data = json.loads(r.text)['flights']
-        # print("flights:\n{}".format(data))
-
-        for row in data:
-            # print(row)
-            base_airport_iata = row['base_airport_iata']
-            fleet_type_id = row['fleet_type_id']
-            flight_number = row['flight_number']
-
-            # self.flights[row['base_airport_iata']]
-            if base_airport_iata not in self.flights:
-                self.flights[base_airport_iata] = {}
-
-            # self.flights[row['base_airport_iata']][row['fleet_type_id']]
-            if fleet_type_id not in self.flights[base_airport_iata]:
-                self.flights[base_airport_iata][fleet_type_id] = (
-                    FlightCollection(self.shuffle_flights)
-                )
-
-            # replace IATA codes of sector airports with pointer to objects
-            if 'sectors' in row and len(row['sectors']) > 0:
-                # print(row['sectors'])
-                # for dirn in ("outbound", "inbound"):
-                #    for s in row['sectors'][dirn]:
-                #        s['start_airport'] = self.airports[s['start_airport_iata']]
-                #        s['end_airport'] = self.airports[s['end_airport_iata']]
-                for s in row['sectors']:
-                    s['start_airport'] = self.airports[s['start_airport_iata']]
-                    s['end_airport'] = self.airports[s['end_airport_iata']]
-            # get the FlightCollection for this base/fleet-type pair
-            flightCln = self.flights[base_airport_iata][fleet_type_id]
-
-            # get flight details
-            f = {key: value for key, value in row.items()
-                 if key in flight_fields
-                 }
-
-            f['base_airport'] = self.airports[row['base_airport_iata']]
-            f['dest_airport'] = self.airports[row['dest_airport_iata']]
-
-            f['fleet_type'] = self.fleet_types[fleet_type_id]
-
-            # permit same flight number with different fleet_type_id
-            if not flight_number in self.flight_lookup:
-                self.flight_lookup[flight_number] = {}
-            self.flight_lookup[flight_number][fleet_type_id] = Flight(f)
-
-            # only flights with desired fleet_type_id added to collection
-            flightCln.append(self.flight_lookup[flight_number][fleet_type_id])
-
-        if len(self.flight_lookup.keys()) == 0:
-            return False
-
-        # add maintenance flights to each FlightCollection
-        for base_airport_iata in self.flights:
-            self.MTXFlights[base_airport_iata] = {}
-            for fleet_type_id in self.flights[base_airport_iata]:
-                mtx = self.MTXFlights[base_airport_iata][fleet_type_id] = (
-                    MaintenanceCheckA(self.airports[base_airport_iata],
-                                      self.fleet_types[fleet_type_id])
-                )
-                flightCln = self.flights[base_airport_iata][fleet_type_id]
-                flightCln.append(mtx)
-
-        return True
-
-    def getTimetables(self):
-        """loads flights and timetable data into a TimetableManager"""
-
-        #cnx = pymysql.connect(user=self.db_user, password=self.db_pass,
-        #                      host=self.db_host, db=self.db_name)
-        #cursor = cnx.cursor(pymysql.cursors.DictCursor)
-
-        timetables = {}
-        tHdrs = {}
-
-        # query = '''
-        # SELECT timetable_id, timetable_name, fleet_type_id,
-        # base_airport_iata,
-        # TIME_FORMAT(base_turnaround_delta, '%H:%i') AS base_turnaround_delta
-        # FROM timetables
-        # WHERE game_id = {}
-        # AND deleted = 'N'
-        # '''.format(self.game_id)
-
-        # cursor.execute(query)
-
-
-        uri = "http://localhost/aws/app/v1/games/" \
-              + self.game_id + "/timetables"
-        r = requests.get(uri)
-        if r.status_code != 200:
-            return False
-
-        self.timetables = {}
-
-        data = json.loads(r.text)['timetables']
-
-        # bomb successfully if no timetables found
-        if len(data) == 0:
-            return True
-
-        for row in data:
-            tHdrs[row['timetable_id']] = row
-            if row['fleet_type_id'] not in self.fleet_types:
-                print(row)
-
-            # add airport and fleet-type objects
-            tHdrs[row['timetable_id']]['fleet_type'] = (
-                self.fleet_types[row['fleet_type_id']]
-            )
-            tHdrs[row['timetable_id']]['base_airport'] = (
-                self.airports[row['base_airport_iata']]
-            )
-
-        # create an additional SQL condition for the timetable_ids we find
-        # timetable_condition = ""
-        # if len(tHdrs.keys()) > 0:
-        #    timetable_condition = "AND t.timetable_id IN ({})".format(
-        #        ", ".join(map(str, list(tHdrs.keys())))
-        #        )
-
-        r = requests.get(uri + "/" + ";".join(map(str, list(tHdrs.keys()))))
-        if r.status_code != 200:
-            return False
-
-        data = json.loads(r.text)['timetables']
-
-        for tt in data:
-            timetable_id = tt['timetable_id']
-            base_airport_iata = tHdrs[timetable_id]['base_airport'].iata_code
-            fleet_type_id = tHdrs[timetable_id]['fleet_type'].fleet_type_id
-
-            timetables[timetable_id] = Timetable(
-                timetable_id=timetable_id,
-                game_id=self.game_id,
-                timetable_name=tHdrs[timetable_id]['timetable_name'],
-                base_airport=tHdrs[timetable_id]['base_airport'],
-                fleet_type=tHdrs[timetable_id]['fleet_type'],
-                outbound_dep=tt["entries"][0]['start_time'],
-                fManager=self.ttManager,
-                base_turnaround_delta=tHdrs[timetable_id]['base_turnaround_delta'])
-
-            for row in tt["entries"]:
-                # flight_lookup fails for MTX
-                # dest_turnaround is bogus
-                dt = (str_to_timedelta(row['dest_turnaround_padding']) +
-                      tHdrs[timetable_id]['fleet_type'].ops_turnaround_length)
-                if row['flight_number'] == 'MTX':
-                    flight = self.MTXFlights[base_airport_iata][fleet_type_id]
-                else:
-                    flight = self.flight_lookup[row['flight_number']][
-                        fleet_type_id]
-                entry = TimetableEntry(flight,
-                                       timetables[timetable_id],
-                                       row['post_padding'], dt)
-                # row['dest_turnaround_padding'])
-                if entry.flight.fleet_type == timetables[
-                    timetable_id].fleet_type:
-                    timetables[timetable_id].append(entry)
-                else:
-                    raise Exception(
-                        "Bad flight for timetable_id [{}]: TimetableEntry {}".
-                        format(timetable_id, entry.flight))
-
-        # add all timetables to the TimetableManager and create self.timetables
-        for id in timetables:
-            self.ttManager.append(timetables[id])
-
-            # self.timetables
-            tt = timetables[id]
-            base_airport_iata = tt.base_airport.iata_code
-            fleet_type_id = tt.fleet_type.fleet_type_id
-            if base_airport_iata not in self.timetables:
-                self.timetables[base_airport_iata] = {}
-            if fleet_type_id not in self.timetables[base_airport_iata]:
-                self.timetables[base_airport_iata][fleet_type_id] = []
-            self.timetables[base_airport_iata][fleet_type_id].append(tt)
-
-        # print(self.ttManager)
-
-        return True
 
     def getRandomStartTime(self, base_airport_iata):
         retVal = None
@@ -453,6 +171,8 @@ class TimetableBuilder:
                  writeToDB=False, ignore_base_timetables=False,
                  add_mtx_gap=False, graveyard=True, jsonDir=None):
         """verify args"""
+        
+        #print(self.flights)
 
         if (base_airport_iata not in self.flights
             or fleet_type_id not in self.flights[base_airport_iata]):
@@ -474,7 +194,7 @@ class TimetableBuilder:
         # start time[0] = earliest_available[last]
 
         # modify maintenance flight to include turnaround
-        mtx = self.MTXFlights[base_airport_iata][fleet_type_id]
+        mtx = self.flManager.MTXFlights[base_airport_iata][fleet_type_id]
         mtx.hasBaseTurnaround = add_mtx_gap
 
         # if ignore_base_timetables is set, we disregard timetables from this
