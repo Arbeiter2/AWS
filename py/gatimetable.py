@@ -1,0 +1,221 @@
+# -*- coding: utf-8 -*-
+"""
+A genetic algorithm version of a timetable.
+
+Each flight is represented by its index position in the flight collection list
+of flights.
+@author: Delano
+"""
+from nptime import nptime
+from nptools import str_to_timedelta
+import math
+from timetables import Timetable
+import random as rnd
+from itertools import permutations
+from flights import Airport, FleetType, FlightCollection, FlightManager
+
+
+class TimetableMutator:
+    
+    def init(self, mut_prob, fltCln):
+        if not isinstance(fltCln, FlightCollection):
+            raise Exception("Invalid FlightCollection")
+            
+        self.mutation_prob = mut_prob
+        self.fltCln = fltCln
+        
+    def highestScoringIndex(self, tt):
+        entryScores = tt.getMetaData()
+        
+        return max(range(len(entryScores)), key=entryScores.__getitem__)
+        
+    """
+    swap worst scoring flight for others in timetable, until score is improved 
+    or all flights have been tried
+    """
+    def __swapInPlace(self, tt, score):
+        highestScoringIndex = self.highestScoringIndex(tt)
+
+        # find element with highest score and swap with everything else 
+        # until we get a lower score
+        for testIndex in range(0, len(tt.flights)):
+            if testIndex == highestScoringIndex:
+                continue
+            temp = tt.flights[testIndex]
+            tt.flights[highestScoringIndex] = tt.flights[testIndex]
+            tt.flights[testIndex] = temp
+            tt.recalc()
+            
+            if tt.getScore() < score:
+                break
+            else: # swap them back
+                temp = tt.flights[highestScoringIndex]
+                tt.flights[testIndex] = tt.flights[highestScoringIndex]
+                tt.flights[highestScoringIndex] = temp
+            
+        return False
+
+    """
+    swap out worst scoring flight for another, until score is improved or no
+    more flights available
+    """
+    def __swapOut(self, tt, score):
+        if not isinstance(tt, Timetable):
+            return False
+            
+        score = tt.getScore()
+        if score == 0:
+            return True
+            
+        p = rnd.random()
+        if p > self.mutation_prob:
+            return tt
+        
+        highestScoringIndex = self.highestScoringIndex(tt)
+        oldFlight = tt.flights[highestScoringIndex].flight
+        ofLength = oldFlight.length() + tt.remaining()
+
+        # find element with highest score and swap with something else 
+        # from fltCln until we get a lower score
+        while True:
+            newFlight = self.fltCln.getShorterFlight(ofLength, random=False)
+            if newFlight is None:
+                break
+            tt.flights[highestScoringIndex].flight = newFlight
+            tt.recalc()
+            
+            if tt.getScore() < score:
+                break
+            else:
+                newFlight = None
+        
+        if newFlight is None:
+            tt.flights[highestScoringIndex].flight = oldFlight
+            return False
+        else:
+            return True
+    
+    """
+    permute order of flights in timetable, up to permuteCount times, stop
+    if score is improved
+    """
+    def __permute(self, tt, score, permuteCount=3):
+        oldFlights = tt.flights
+
+        # use all but the first (zeroth) entry
+        for run in range(0, permuteCount):
+            rndIndex = rnd.randint(1, math.factorial(len(tt.flights))-1)
+            flights = list(list(permutations(tt.flights))[rndIndex])
+            tt.flights = flights
+            tt.recalc()
+
+            if tt.getScore() < score:
+                return True
+        
+        tt.flights = oldFlights
+        tt.recalc()
+        return False
+    
+    """
+    try mutating a timetable, until the score is reduced, with following
+    order of precedence:
+        
+        swapInPlace - swap worst scoring flight with others in-situ
+        swapOut - swap worst scoring flight with one from pool
+        permute - permute order of flights
+        
+    returns True if the Timetable has a reduced score
+    returns False otherwise
+    """
+    def mutate(self, tt):
+        if not isinstance(tt, Timetable):
+            raise Exception("mutate(): Invalid args [{}]".format(tt))
+            
+        score = tt.getScore()
+        if score == 0:
+            return True
+            
+        p = rnd.random()
+        if p >= self.mutation_prob:
+            return False
+        
+        if self.__swapInPlace(tt, score):
+            return True
+        
+        if self.__swapOut(tt, score):
+            return True
+        
+        if self.__permute(tt, score):
+            return True
+        
+        # no mutation attempts resulted in improved score 
+        return False
+      
+        
+    
+class GATimetable:
+    def __init__(self, game_id=None, base_airport=None, fleet_type=None, 
+                 outbound_dep=None, fManager=None, base_turnaround_delta=None, 
+                 max_range=None, graveyard=True):
+        if (game_id is None 
+        or  not isinstance(base_airport, Airport) 
+        or  not isinstance(fleet_type, FleetType)
+        or  not isinstance(outbound_dep, nptime)):
+            print("##P{} {} {} {}".format(game_id, str(base_airport), 
+                  str(fleet_type), outbound_dep))
+            raise Exception("GATimetable(): Invalid args")
+            
+        if not isinstance(fManager, FlightManager):
+            raise Exception(
+            "GATimetable(): "
+            "Invalid FlightManager arg: {}".format(fManager)
+            )
+           
+        self.game_id = game_id
+        self.base_airport = base_airport
+        self.fleet_type = fleet_type
+
+        delta = str_to_timedelta(base_turnaround_delta)
+        if (delta is not None 
+        and delta + self.fleet_type.min_turnaround >= 
+                self.fleet_type.ops_turnaround_length):
+            self.base_turnaround_length =delta + self.fleet_type.min_turnaround
+            self.base_turnaround_delta = delta
+        else:
+            self.base_turnaround_length = self.fleet_type.ops_turnaround_length
+            self.base_turnaround_delta = (
+                    self.fleet_type.ops_turnaround_length - 
+                    self.fleet_type.min_turnaround
+                    )
+        self.graveyard = graveyard
+        
+        self.outbound_dep = outbound_dep
+        
+        # GA components
+        self.population = []
+        self.bestScores = []
+        self.generation = 0
+    
+
+    def promote(self, population, bestIndex):
+        if not isinstance(population, list):
+            return False
+        
+        if bestIndex not in range(0, len(population)):
+            return False
+        
+        # verify bestIndex-th entry is indeed good
+        if population[bestIndex].getScore() != 0.0:
+            return False
+        
+        # get list of flight numbers
+        promotedFlights = set(population[bestIndex].to_list())
+        
+        for idx in range(0, len(population)):
+            if idx == bestIndex:
+                continue
+            
+            # only MTX should be shared
+            if len(population[idx].to_list() & promotedFlights) > 1:
+                pass
+
