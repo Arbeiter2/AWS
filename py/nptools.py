@@ -1,6 +1,16 @@
 from nptime import nptime
 from datetime import timedelta
 
+def nptime_diff_sec(a, b):
+    if not isinstance(a, nptime) or not isinstance(b, nptime):
+        return None
+        
+    diff = abs((a - b).seconds)
+    if diff > 43200:
+        return 86400 - diff
+    else:
+        return diff
+
 def str_to_timedelta(hhmmss):
     """converts string of format HH:MM:SS to timedelta object, excluding seconds"""
     if isinstance(hhmmss, timedelta):
