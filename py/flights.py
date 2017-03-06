@@ -4,6 +4,7 @@ from nptools import str_to_timedelta, str_to_nptime, TimeIsInWindow
 from datasources import DataSource
 import random
 from functools import reduce
+from copy import deepcopy
 import bitstring
 
 
@@ -118,6 +119,9 @@ class Flight:
             self.dest_airport.iata_code, self.fleet_type.fleet_icao_code
             )
 
+"""
+stores details of all flights available from provided source
+"""
 class FlightManager:
     def __init__(self, source):
         if not isinstance(source, DataSource):
@@ -133,6 +137,9 @@ class FlightManager:
         self.getFlights()
         print(self.flights)
         
+    """
+    get flight data from data source
+    """
     def getFlights(self):
  
         airport_fields = [
@@ -260,9 +267,13 @@ class FlightManager:
                 flightCln.append(mtx)
 
         return True
+
         
         
-        
+"""
+standard 5-hour maitenance check; functions as a flight with destination
+same as base
+"""      
 class MaintenanceCheckA(Flight):
     """weekly A-check of duration 5 hours"""
     def __init__(self, base_airport, fleet_type):
@@ -288,7 +299,11 @@ class MaintenanceCheckA(Flight):
 
     def getInbound(self):
         return self.inbound_length
-        
+
+
+"""
+container for subset of flights from FlightManager
+"""
 class FlightCollection:
     def __init__(self, base_airport, shuffle =True):
         self.base_airport = base_airport        
@@ -299,6 +314,16 @@ class FlightCollection:
         self.indexMap['MTX'] = 0
         self.durationIndex = []
         self.MTXEntry = None
+        
+    def clone(self):
+        out = FlightCollection(self.base_airport, self.shuffle)
+        out.flights = deepcopy(self.flights)
+        out.deleted = deepcopy(self.deleted)
+        out.indexMap = deepcopy(self.indexMap)
+        out.durationIndex = deepcopy(self.durationIndex)
+        out.MTXEntry = self.MTXEntry
+        
+        return out
         
     def append(self, f):
         if not isinstance(f, Flight) or f is None:
@@ -312,12 +337,20 @@ class FlightCollection:
             self.deleted.append(False)
             self.indexMap[f.flight_number] = len(self.flights) - 1
 
+    """index of flights in descending order"""
     def buildDurationIndex(self):
-        """index of flights in descending order"""
         self.durationIndex = sorted(range(len(self.flights)),
                                     key=lambda x: self.flights[x].length,
                                     reverse=True)
-        
+
+    """
+    returns a non-deleted flight of shorter or equal total duration than 
+    provided timespan
+    
+    if random is False (default), search is in descending order of duration
+    if random is True, first shorter flight is returned
+    if no shorter flight available, return None
+    """
     def getShorterFlight(self, fltLength, random=False):
         if fltLength is None or not isinstance(fltLength, timedelta):
             return None
@@ -412,7 +445,9 @@ class FlightCollection:
     def setShuffle(self, status):
         self.shuffle = status
                 
-        
+"""
+iterator for all flights in a FlightCollection
+"""       
 class FlightCollectionIter:
     def __init__(self, flightCollection):
         """add the indexes of all non-deleted flights"""

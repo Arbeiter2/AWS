@@ -45,6 +45,7 @@ class TimetableManager:
                 raise Exception("TimetableManager: No data source provided")
             self.source = source
             self.fMgr = FlightManager(self.source)
+            self.fMgr.getFlights()
            
         self.game_id = self.source.game_id        
         self.routes = {}
@@ -61,13 +62,10 @@ class TimetableManager:
             
         self.ignore_base_timetables = status
 
+    """
+    loads flights and timetable data into a TimetableManager
+    """
     def getTimetables(self):
-        """loads flights and timetable data into a TimetableManager"""
-
-        #cnx = pymysql.connect(user=self.db_user, password=self.db_pass,
-        #                      host=self.db_host, db=self.db_name)
-        #cursor = cnx.cursor(pymysql.cursors.DictCursor)
-
         timetables = {}
 
         data = self.source.getTimetables()
@@ -82,14 +80,13 @@ class TimetableManager:
             fleet_type_id = tt['fleet_type_id']
             fleet_type = self.fMgr.fleet_types[fleet_type_id]
 
-            timetables[timetable_id] = Timetable(
+            timetables[timetable_id] = Timetable(self,
                 timetable_id=timetable_id,
                 game_id=self.game_id,
                 timetable_name=tt['timetable_name'],
                 base_airport=self.fMgr.airports[tt['base_airport_iata']],
                 fleet_type=fleet_type,
                 outbound_dep=tt["entries"][0]['start_time'],
-                #fManager=self.ttManager,
                 base_turnaround_delta=tt['base_turnaround_delta'])
 
             for row in tt["entries"]:
@@ -133,12 +130,57 @@ class TimetableManager:
 
         return True
         
+    """
+    create FlightCollection for given base/fleet pair
+    """
+    def getFlightCollection(self, base_airport_iata, fleet_type_id,
+                            exclude_flights=None):
+        if (base_airport_iata not in self.fMgr.flights 
+         or fleet_type_id not in self.fMgr.flights[base_airport_iata]):
+            return None
         
+        fltCln = self.fMgr.flights[base_airport_iata][fleet_type_id].clone()
+
+        # a single flight number may be operated by multiple fleet_types;
+        # remove all timetabled flights in other fleet_type_id values
+        if base_airport_iata in self.timetables.keys():
+            flTypes = filter(lambda q: q != fleet_type_id,
+                             self.timetables[base_airport_iata].keys())
+            for f in flTypes:
+                for x in self.timetables[base_airport_iata][f]:
+                    for e in x.flights:
+                        if e.flight.flight_number != "MTX":
+                            # print("Deleting "+str(e.flight))
+                            fltCln.deleteByFlightNumber(e.flight.flight_number)
         
+        # if ignore_base_timetables is not set, we remove timetabled
+        # flights from fltCln
+        if (not self.ignore_base_timetables
+            and base_airport_iata in self.timetables
+            and fleet_type_id in self.timetables[base_airport_iata]):
+            for ttObj in self.timetables[base_airport_iata][fleet_type_id]:
+                for ttEntryObj in ttObj.flights:
+                    fltCln.delete(ttEntryObj.flight)
+        else:
+            fltCln.reset()
+
+        # if list of excluded flight numbers is supplied, delete them from
+        # the FlightCollection
+        if isinstance(exclude_flights, list):
+            exclude_flights = [s.upper() for s in exclude_flights]
+            for x in exclude_flights:
+                if isinstance(x, str) and x != 'MTX':
+                    fltCln.deleteByFlightNumber(x)
+                    
+        return fltCln
+
+
+    """
+    adds an entry with outbound and inbound departure times for each
+    timetable entry it receives; can handle either TimetableEntry or
+    Timetable objects as argument
+    """
     def append(self, obj):
-        """adds an entry with outbound and inbound departure times for each """
-        """timetable entry it receives; can handle either TimetableEntry or """
-        """Timetable objects as argumebt"""
         if isinstance(obj, TimetableEntry):
             entries = [obj]
         elif isinstance(obj, Timetable):
@@ -221,9 +263,11 @@ class TimetableManager:
                     break # for x in self.routes[key]:
 
 
+    """
+    create new TimetableManager instance, utilising flights with the
+    specified base_airport_iata, but excluding a given fleet_type_id
+    """
     def filter(self, base_airport_iata, fleet_type_id):
-        """create new TimetableManager instance, utilising flights with the
-        specified base_airport_iata, but excluding a given fleet_type_id"""
         out = TimetableManager(source=self.source, ftManager=self.fMgr, 
                                build=False)
         out.timetables = self.timetables
@@ -255,13 +299,13 @@ class TimetableManager:
             out += l
            
         return out
+
+    """
+    this function replicates the PHP code of similar function;
     
+    looks for conflicts between a timetable entry and all other entries
+    """    
     def hasConflicts(self, ttEntry):
-        '''
-        this function replicates the PHP code of similar function;
-        
-        looks for conflicts between a timetable entry and all other entries
-        '''
         debug = False
         if not isinstance(ttEntry, TimetableEntry):
             raise Exception("Bad arg passed to TimetableManager.hasConflicts")

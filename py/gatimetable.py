@@ -9,10 +9,10 @@ of flights.
 from nptime import nptime
 from nptools import str_to_timedelta
 import math
-from timetables import Timetable
+from timetables import Timetable, TimetableManager
 import random as rnd
 from itertools import permutations
-from flights import Airport, FleetType, FlightCollection, FlightManager
+from flights import Airport, FleetType, FlightCollection
 
 
 class TimetableMutator:
@@ -28,6 +28,17 @@ class TimetableMutator:
         entryScores = tt.getMetaData()
         
         return max(range(len(entryScores)), key=entryScores.__getitem__)
+    
+    """
+    adjust worst scoring entry
+    """
+    def __adjust(self, tt, score):
+        highestScoringIndex = self.highestScoringIndex(tt)
+
+        tt.flights[highestScoringIndex].adjust()
+        tt.recalc()
+        return tt.getScore() < score
+
         
     """
     swap worst scoring flight for others in timetable, until score is improved 
@@ -60,18 +71,8 @@ class TimetableMutator:
     more flights available
     """
     def __swapOut(self, tt, score):
-        if not isinstance(tt, Timetable):
-            return False
-            
-        score = tt.getScore()
-        if score == 0:
-            return True
-            
-        p = rnd.random()
-        if p > self.mutation_prob:
-            return tt
-        
         highestScoringIndex = self.highestScoringIndex(tt)
+
         oldFlight = tt.flights[highestScoringIndex].flight
         ofLength = oldFlight.length() + tt.remaining()
 
@@ -139,6 +140,9 @@ class TimetableMutator:
         if p >= self.mutation_prob:
             return False
         
+        if self.__adjust(tt, score):
+            return True
+        
         if self.__swapInPlace(tt, score):
             return True
         
@@ -154,24 +158,21 @@ class TimetableMutator:
         
     
 class GATimetable:
-    def __init__(self, game_id=None, base_airport=None, fleet_type=None, 
-                 outbound_dep=None, fManager=None, base_turnaround_delta=None, 
-                 max_range=None, graveyard=True):
-        if (game_id is None 
+    def __init__(self, ttManager, 
+                 base_airport, fleet_type, 
+                 outbound_dep, 
+                 base_turnaround_delta=None, 
+                 max_range=None, 
+                 graveyard=True):
+        if (not isinstance(ttManager, TimetableManager)
         or  not isinstance(base_airport, Airport) 
         or  not isinstance(fleet_type, FleetType)
         or  not isinstance(outbound_dep, nptime)):
-            print("##P{} {} {} {}".format(game_id, str(base_airport), 
+            print("##P{} {} {} {}".format(str(ttManager), str(base_airport), 
                   str(fleet_type), outbound_dep))
             raise Exception("GATimetable(): Invalid args")
             
-        if not isinstance(fManager, FlightManager):
-            raise Exception(
-            "GATimetable(): "
-            "Invalid FlightManager arg: {}".format(fManager)
-            )
-           
-        self.game_id = game_id
+        self.ttManager = ttManager
         self.base_airport = base_airport
         self.fleet_type = fleet_type
 
@@ -195,8 +196,21 @@ class GATimetable:
         self.population = []
         self.bestScores = []
         self.generation = 0
+        
+    def initPopulation(self, popSize):
+        if popSize <= 0:
+            return None
+        
+        out = []
+        for i in range(0, popSize):
+            tt = Timetable(self.ttManager)
     
 
+    """
+    write best-scoring timetable in population, and replace entire population 
+    with new randomly generated entries, which will not use flights from 
+    promoted winner
+    """
     def promote(self, population, bestIndex):
         if not isinstance(population, list):
             return False
