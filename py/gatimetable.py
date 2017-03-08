@@ -121,6 +121,7 @@ class TimetableMutator:
     try mutating a timetable, until the score is reduced, with following
     order of precedence:
         
+        adjust - modify turnaround padding of worst scoring flight 
         swapInPlace - swap worst scoring flight with others in-situ
         swapOut - swap worst scoring flight with one from pool
         permute - permute order of flights
@@ -163,7 +164,8 @@ class GATimetable:
                  outbound_dep, 
                  base_turnaround_delta=None, 
                  max_range=None, 
-                 graveyard=True):
+                 graveyard=True,
+                 ignore_base_timetables=False):
         if (not isinstance(ttManager, TimetableManager)
         or  not isinstance(base_airport, Airport) 
         or  not isinstance(fleet_type, FleetType)
@@ -189,21 +191,43 @@ class GATimetable:
                     self.fleet_type.min_turnaround
                     )
         self.graveyard = graveyard
-        
+        self.max_range = max_range
         self.outbound_dep = outbound_dep
+        self.ignore_base_timetables = ignore_base_timetables
         
         # GA components
         self.population = []
         self.bestScores = []
         self.generation = 0
         
+    """
+    create initial population of random timetables and flight collections
+    """
     def initPopulation(self, popSize):
         if popSize <= 0:
             return None
         
-        out = []
-        for i in range(0, popSize):
-            tt = Timetable(self.ttManager)
+        # popSize random timetables
+        popn = [Timetable(
+                   self.ttManager, 
+                   base_airport=self.base_airport, 
+                   fleet_type=self.fleet_type, 
+                   outbound_dep=self.outbound_dep, 
+                   base_turnaround_delta=self.base_turnaround_delta, 
+                   max_range=self.max_range, 
+                   graveyard=self.graveyard).randomise()
+              for _ in range(0, popSize)]
+    
+        # all flight collections will be the same
+        origFltCln = self.ttManager.getFlightCollection(
+                            base_airport_iata=self.base_airport.iata_code, 
+                            fleet_type_id=self.fleet_type.fleet_type_id,
+                            max_range=self.max_range,
+                            ignore_base_timetables=self.ignore_base_timetables
+                     )
+        fltClns = [origFltCln.clone() for _ in range(0, popSize)]
+
+        return popn, fltClns
     
 
     """
@@ -211,25 +235,17 @@ class GATimetable:
     with new randomly generated entries, which will not use flights from 
     promoted winner
     """
-    def promote(self, population, bestIndex):
+    def promote(self, population, fltClns, bestIndex):
         if not isinstance(population, list):
-            return False
+            return population, fltClns
         
         if bestIndex not in range(0, len(population)):
-            return False
+            return population, fltClns
         
         # verify bestIndex-th entry is indeed good
         if population[bestIndex].getScore() != 0.0:
-            return False
+            return population, fltClns
         
-        # get list of flight numbers
-        promotedFlights = set(population[bestIndex].to_list())
+        self.ttManager.append(population[bestIndex])
         
-        for idx in range(0, len(population)):
-            if idx == bestIndex:
-                continue
-            
-            # only MTX should be shared
-            if len(population[idx].to_list() & promotedFlights) > 1:
-                pass
-
+        return self.initPopulation(len(population))

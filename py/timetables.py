@@ -13,8 +13,8 @@ import json
 import math
 
 
-        
-        
+
+
 """
 utility class for checking operational hours for takeoffs and landings
 """
@@ -25,34 +25,35 @@ class OpTimes:
     """arrival curfew: 00:45 - 05:00"""
     EarliestDep = nptime(5, 45)
     LatestDep = nptime(0, 30)
-    
+
     EarliestArr = nptime(5, 00)
     LatestArr = nptime(0, 30)
-    
+
     @staticmethod
     def InDepCurfew(t):
         if not isinstance(t, nptime):
             return False
-            
+
         return TimeIsInWindow(t, OpTimes.LatestDep, OpTimes.EarliestDep)
 
     @staticmethod
     def InArrCurfew(t):
         if not isinstance(t, nptime):
             return False
-            
+
         return TimeIsInWindow(t, OpTimes.LatestArr, OpTimes.EarliestArr)
 
-        
+
 
 """
+container representing a scheduled event in a timetable
 """
 class TimetableEntry:
-    def __init__(self, f, tt, post_padding = "0:00", 
+    def __init__(self, f, tt, post_padding = "0:00",
         dest_turnaround_padding = None):
-        if (not isinstance(f, Flight) 
-        or not isinstance(tt, Timetable) 
-        or f.base_airport != tt.base_airport 
+        if (not isinstance(f, Flight)
+        or not isinstance(tt, Timetable)
+        or f.base_airport != tt.base_airport
         or not f.isMaintenance
         or f.fleet_type != tt.fleet_type):
             raise Exception("Invalid flight {} \nor invalid timetable {}"
@@ -62,8 +63,8 @@ class TimetableEntry:
         self.parent = tt
         self.start_day = self.parent.next_start_day
         self.outbound_dep = self.parent.available_time
-        
-        # if we are loading data from the database, we want to use the 
+
+        # if we are loading data from the database, we want to use the
         # turnaround_length specified, otherwise use the fleet type default
         if dest_turnaround_padding is None:
             self.dest_turnaround_padding = tt.fleet_type.ops_turnaround_length
@@ -89,52 +90,52 @@ class TimetableEntry:
 
         self.recalc()
         #self.adjust()
-        
+
     def clone(self):
         return TimetableEntry(self.flight, self.parent, self.post_padding,
                                   self.dest_turnaround_padding)
-        
+
 
     def recalc(self):
         self.outbound_arr = (self.outbound_dep + self.flight.getOutbound() +
             timedelta(seconds=int(self.flight.delta_tz * 3600)))
         self.inbound_dep = self.outbound_arr + self.dest_turnaround_padding
-        self.inbound_arr = (self.inbound_dep + self.flight.getInbound() + 
+        self.inbound_arr = (self.inbound_dep + self.flight.getInbound() +
             timedelta(seconds=-int(self.flight.delta_tz * 3600)))
-        self.available_time = (self.inbound_arr + self.base_turnaround_length + 
+        self.available_time = (self.inbound_arr + self.base_turnaround_length +
             self.post_padding)
 #        print("id:{} fl:{} tu:{} {} {} {} {} {}".format(self.parent.timetable_id,
-#              self.flight.flight_number, 
+#              self.flight.flight_number,
 #              self.dest_turnaround_padding,
 #              self.outbound_dep, self.outbound_arr,
 #              self.inbound_dep, self.inbound_arr,
 #              self.available_time))
 
-        
-        self.total_time = (self.flight.getOutbound() + 
-            self.dest_turnaround_padding + self.flight.getInbound() + 
+
+        self.total_time = (self.flight.getOutbound() +
+            self.dest_turnaround_padding + self.flight.getInbound() +
             self.base_turnaround_length + self.post_padding)
         self.available_day = self.start_day + int(
-            self.outbound_dep.to_timedelta().seconds + 
+            self.outbound_dep.to_timedelta().seconds +
             self.total_time.total_seconds()) // 86400
-        
+
         # correct for days going over a weekend
         if (self.available_day > 7):
             self.available_day = self.available_day % 7
-            
+
         self.scoreCalc()
-            
+
     def scoreCalc(self):
         self.metaScore.calc()
 
-            
+
     def is_good(self):
         #self.score()
         return self.metaScore.get() == 0
-        
+
     def getLength(self):
         return self.flight.length() + self.post_padding
-            
+
     def checkLegCurfews(self):
         # check whether any legs are in breach of curfew at the tech stop
         #print ("Checking curfews for {}".format(self.flight.__str__()))
@@ -144,49 +145,49 @@ class TimetableEntry:
                 start = self.outbound_dep
             else:
                 start = self.inbound_dep
-                
-            # we don't need to check arrival at the last point, as this 
+
+            # we don't need to check arrival at the last point, as this
             # covered in the standard is_good check
             for i in range(0, len(self.flight.sectors[dirn])-1):
                 leg = self.flight.sectors[dirn][i]
-                delta_tz = (leg['end_airport'].timezone - 
+                delta_tz = (leg['end_airport'].timezone -
                     leg['start_airport'].timezone)
 
                 arr = (start + leg['sector_length'] + timedelta(
                     seconds=int(delta_tz * 3600)))
-                    
+
                 dep = arr + self.flight.fleet_type.min_turnaround
                 #print("{} - {}: arr/{} dep/{}".format(leg['start_airport'].iata_code, leg['end_airport'].iata_code, arr, dep))
 
                 if leg['end_airport'].in_curfew(arr):
                     out.append("{} closed at arrival time {}".format(
                         leg['end_airport'].iata_code, arr))
-                
+
                 if leg['end_airport'].in_curfew(dep):
                     out.append("{} closed at departure time {}".format(
                         leg['end_airport'].iata_code, dep))
-                
+
                 # ready for the next hop, where this becomes the start_airport
                 start = dep
 
-        return out        
-    
+        return out
+
     """
     modify dest_turnaround_padding and/or base_turnaround_padding to improve
-    score, ensuring parent timetable does not exceed permissible hours 
+    score, ensuring parent timetable does not exceed permissible hours
     """
     def adjust(self):
         # do nothing if we're healthy already
         if self.metaScore.get() == 0.0:
             return
-        
+
         # maximum adjustment possible, based on parent
         max_adjust = self.parent.remaining()
-        
+
         #
         # adjust dest_turnaround_padding
         #
-        
+
         # find the effective inbound curfew
         inbound_curfew_start = OpTimes.LatestDep
         inbound_curfew_finish = OpTimes.EarliestDep
@@ -200,21 +201,21 @@ class TimetableEntry:
 
             if self.flight.dest_airport.curfew_finish > OpTimes.EarliestDep:
                 inbound_curfew_finish = self.flight.dest_airport.curfew_finish
-                
-        
+
+
         # if the end of the curfew is not too far away, add some padding to
         # the destination turnaround
-        if TimeIsInWindow(self.inbound_dep, inbound_curfew_start, 
+        if TimeIsInWindow(self.inbound_dep, inbound_curfew_start,
             inbound_curfew_finish):
             delta = timedelta(seconds=(
-                inbound_curfew_finish - 
-                self.inbound_dep + 
+                inbound_curfew_finish -
+                self.inbound_dep +
                 timedelta(seconds=300)).seconds)
             if delta < min([max_adjust, self.max_padding]):
                 #pass
                 self.dest_turnaround_padding += delta
                 #print("Padding inbd {} from {} to {} ({})".format(
-                 #   str(self.flight), stt, 
+                 #   str(self.flight), stt,
                   #  self.inbound_dep + delta,
                   #  self.dest_turnaround_padding))
                 self.recalc()
@@ -222,16 +223,16 @@ class TimetableEntry:
                 if self.metaScore.get() == 0.0:
                     return
 
-        
+
         #
         # adjust post_padding
         #
         max_adjust = self.parent.remaining()
-       
+
         # find the effective curfew for the next flight after this one
         outbound_curfew_start = OpTimes.LatestDep
         outbound_curfew_finish = OpTimes.EarliestDep
-        
+
         if self.flight.base_airport.curfew_start is not None:
             if (self.flight.base_airport.curfew_start - OpTimes.LatestDep >
                     timedelta(hours=12)):
@@ -239,14 +240,14 @@ class TimetableEntry:
 
             if self.flight.base_airport.curfew_finish > OpTimes.EarliestDep:
                 outbound_curfew_finish = self.flight.base_airport.curfew_finish
-        
+
         # if the end of the curfew is not too far away, add some padding to
         # the base turnaround
-        if TimeIsInWindow(self.available_time, outbound_curfew_start, 
+        if TimeIsInWindow(self.available_time, outbound_curfew_start,
             outbound_curfew_finish):
             delta = timedelta(seconds=(
-                outbound_curfew_finish - 
-                self.available_time + 
+                outbound_curfew_finish -
+                self.available_time +
                 timedelta(seconds=300)).seconds)
             if delta < min([max_adjust, self.max_padding]):
                 self.post_padding += delta
@@ -259,8 +260,8 @@ class TimetableEntry:
     def __str__(self):
         return (
             "{:<8}"      # flight_number
-            "{:<6}"      # dest airport 
-            "{:<8}"      # distance_nm 
+            "{:<6}"      # dest airport
+            "{:<8}"      # distance_nm
             "{:<5}"      # start day
             "{:<10}"     # outbound_dep
             "{:<10}"     # outbound_arr
@@ -270,15 +271,15 @@ class TimetableEntry:
             "{:<5}"      # available_day
             "{:<10}\n"   # available time
             .format(
-                str(self.flight.flight_number), 
+                str(self.flight.flight_number),
                 self.flight.dest_airport.iata_code,
                 self.flight.distance_nm,
-                self.start_day, self.outbound_dep.strftime("%H:%M"), 
-                self.outbound_arr.strftime("%H:%M"), 
-                self.inbound_dep.strftime("%H:%M"), 
-                self.inbound_arr.strftime("%H:%M"), str(self.total_time), 
+                self.start_day, self.outbound_dep.strftime("%H:%M"),
+                self.outbound_arr.strftime("%H:%M"),
+                self.inbound_dep.strftime("%H:%M"),
+                self.inbound_arr.strftime("%H:%M"), str(self.total_time),
                 self.available_day, self.available_time.strftime("%H:%M")))
- 
+
     def to_dict(self):
         out = OrderedDict()
         out['timetable_id'] = self.parent.timetable_id
@@ -286,15 +287,15 @@ class TimetableEntry:
         out['dest_airport_iata'] = self.flight.dest_airport.iata_code
         out['start_day'] = self.start_day
         out['start_time'] = time_to_str(self.outbound_dep)
-        out['outbound_arr'] = time_to_str(self.outbound_arr) 
-        if (self.dest_turnaround_padding > 
+        out['outbound_arr'] = time_to_str(self.outbound_arr)
+        if (self.dest_turnaround_padding >
             self.parent.fleet_type.ops_turnaround_length):
             out['dest_turnaround_padding'] = time_to_str(
-                self.dest_turnaround_padding - 
+                self.dest_turnaround_padding -
                 self.parent.fleet_type.ops_turnaround_length)
         else:
             out['dest_turnaround_padding'] = "00:00"
-            
+
         out['inbound_dep'] = time_to_str(self.inbound_dep)
         out['inbound_arr'] = time_to_str(self.inbound_arr)
         out['earliest_available'] = time_to_str(self.available_time)
@@ -303,7 +304,9 @@ class TimetableEntry:
         return out
 
 """
-fitness measure across of TimetableEntry across multiple parameters
+fitness measure of TimetableEntry across multiple parameters
+
+an entry with no problems has a score of zero (0) for all parameters
 """
 class FlightScore:
     def __init__(self, entry):
@@ -311,34 +314,34 @@ class FlightScore:
         self.reset()
         if not isinstance(entry, TimetableEntry):
             raise Exception("FlightScore.__init__: "
-                            "Invalid TimetableEntry [{}]".format(entry))            
+                            "Invalid TimetableEntry [{}]".format(entry))
         self.ttEntry = entry
-        
+
     def reset(self):
         self.errors['outbound_dep_graveyard'] = 0
         self.errors['outbound_dep_curfew'] = 0
         self.errors['outbound_arr_graveyard'] = 0
         self.errors['outbound_arr_curfew'] = 0
-        
+
         self.errors['inbound_dep_graveyard'] = 0
         self.errors['inbound_dep_curfew'] = 0
         self.errors['inbound_arr_graveyard'] = 0
         self.errors['inbound_arr_curfew'] = 0
-        
+
         self.errors['distance'] = 0
         self.errors['leg_curfews'] = 0
         self.errors['conflicts'] = 0
 
     def calc(self):
         self.reset()
-        
+
         # reject flights exceeding maximum range of timetable
         if (self.ttEntry.parent.max_range is not None
         and self.ttEntry.distance_nm > self.ttEntry.parent.max_range):
             self.errors['distance'] = 1
 
         # check airport curfews first
-        if self.ttEntry.base_airport.in_curfew(self.ttEntry.outbound_dep): 
+        if self.ttEntry.base_airport.in_curfew(self.ttEntry.outbound_dep):
             self.errors['outbound_dep_curfew'] = 2
         if self.ttEntry.dest_airport.in_curfew(self.ttEntry.outbound_arr):
             self.errors['outbound_arr_curfew'] = 2
@@ -357,17 +360,17 @@ class FlightScore:
                 self.errors['inbound_dep_graveyard'] = 1
             if OpTimes.InArrCurfew(self.ttEntry.inbound_arr):
                 self.errors['inbound_arr_graveyard'] = 1
-            
+
         # check individual legs for curfew violations
         if self.ttEntry.hasStops:
             res = self.ttEntry.checkLegCurfews()
             self.errors['leg_curfews'] = len(res) * 2
-            
+
         # look for conflicts with other flights on the same route
-        if (self.ttEntry.parent.ttManager 
+        if (self.ttEntry.parent.ttManager
         and self.ttEntry.parent.ttManager.hasConflicts(self.ttEntry)):
             self.errors['conflicts'] = 1
-            
+
     def get(self):
         return math.sqrt(sum(map(lambda x: x * x, self.errors.values())))
 
@@ -376,24 +379,29 @@ class FlightScore:
 container representing aircraft timetable
 
 consists of an ordered collection of TimetableEntry objects
-""" 
+"""
 class Timetable:
-    
-    def __init__(self, ttManager, timetable_id =None,
-                 timetable_name=None, base_airport =None, fleet_type=None, 
-                 outbound_dep=None, base_turnaround_delta =None,
-                 max_range =None, graveyard=True):
-        
+
+    def __init__(self, ttManager, # parent TimetableManager
+                 timetable_id=None,
+                 timetable_name=None, 
+                 base_airport =None, 
+                 fleet_type=None,
+                 outbound_dep=None, 
+                 base_turnaround_delta=None,
+                 max_range=None, 
+                 graveyard=True):
+
         if (not isinstance(ttManager, TimetableManager)
-        or  not isinstance(base_airport, Airport) 
+        or  not isinstance(base_airport, Airport)
         or  not isinstance(fleet_type, FleetType)
         or  not isinstance(str_to_nptime(outbound_dep), nptime)):
-            print("##P{} {} {} {}".format(str(ttManager), str(base_airport), 
+            print("##P{} {} {} {}".format(str(ttManager), str(base_airport),
                   str(fleet_type), outbound_dep))
             raise Exception("Timetable(): Invalid args")
 
         self.ttManager = ttManager
-            
+
         self.flights = []
         self.timetable_name = timetable_name
         self.base_airport = base_airport
@@ -404,7 +412,7 @@ class Timetable:
         # by convention
         self.next_start_day = 1
         self.start_time = str_to_nptime(outbound_dep)
-        self.available_time = str_to_nptime(outbound_dep)    
+        self.available_time = str_to_nptime(outbound_dep)
 
         # if base_turnaround_delta is supplied, add it to base turnaround, and
         # if it is greater than or comparable to the ops_turnaround value,
@@ -413,24 +421,24 @@ class Timetable:
         # otherwise, use the ops_turnaround as base_turnaround_length
         #
         delta = str_to_timedelta(base_turnaround_delta)
-        if (delta is not None 
-        and delta + self.fleet_type.min_turnaround >= 
+        if (delta is not None
+        and delta + self.fleet_type.min_turnaround >=
                 self.fleet_type.ops_turnaround_length):
             self.base_turnaround_length =delta + self.fleet_type.min_turnaround
             self.base_turnaround_delta = delta
         else:
             self.base_turnaround_length = self.fleet_type.ops_turnaround_length
             self.base_turnaround_delta = (
-                    self.fleet_type.ops_turnaround_length - 
+                    self.fleet_type.ops_turnaround_length -
                     self.fleet_type.min_turnaround
                     )
-            
+
         self.max_range = None
         if max_range is not None and max_range > 0:
             self.max_range = max_range
-    
+
     def clone(self):
-        newTT = Timetable(self.ttManager, 
+        newTT = Timetable(self.ttManager,
             timetable_id=self.timetable_id,
             timetable_name=self.timetable_name,
             base_airport=self.base_airport,
@@ -439,9 +447,9 @@ class Timetable:
             base_turnaround_delta=self.base_turnaround_delta,
             graveyard=self.graveyard,
             max_range=self.max_range)
-        
+
         newTT.flights = [e.clone() for e in self.flights]
-        
+
     """
     create a random timetable from available flights, starting with MTX,
     then permute
@@ -449,14 +457,14 @@ class Timetable:
     def randomise(self, fltCln):
         if not isinstance(fltCln, FlightCollection):
             return False
-        
+
         mtx = (
                 self.ttManager.fManager.MTXFlights[self.base_airport.iata_code]
                 [self.fleet_type.fleet_type_id]
                 )
         self.flights = [mtx]
         self.recalc()
-        
+
         # randomly choose available flights until nothing else can be added
         while True:
             newFlight = fltCln.getShorterFlight(self.remaining())
@@ -472,16 +480,18 @@ class Timetable:
                 rnd.randint(1, math.factorial(len(self.flights)))
                 ])
         self.recalc()
+        
+        return self
 
-       
+
     def appendFlight(self, f):
-        if (not isinstance(f, Flight) 
-        or f.base_airport != self.base_airport 
-        or (not f.isMaintenance 
+        if (not isinstance(f, Flight)
+        or f.base_airport != self.base_airport
+        or (not f.isMaintenance
             and f.fleet_type != self.fleet_type)):
             raise Exception("Invalid flight "
                             "passed to Timetable.appendFlight: {}".format(f))
-            
+
         newEntry = TimetableEntry(f, self)
         return self.append(newEntry)
 
@@ -489,21 +499,21 @@ class Timetable:
     """add TimetableEntry"""
     def append(self, f):
         # throw exception for invalid  arg
-        if (not isinstance(f, TimetableEntry) 
-        or f.flight.base_airport != self.base_airport 
-        or (not f.flight.isMaintenance 
+        if (not isinstance(f, TimetableEntry)
+        or f.flight.base_airport != self.base_airport
+        or (not f.flight.isMaintenance
             and f.flight.fleet_type != self.fleet_type)):
             raise Exception("Invalid flight "
                             "passed to Timetable.append: {}".format(f))
-            
-        # check total length 
+
+        # check total length
         if f.getLength() > self.remaining():
             return False
-        
+
         # check whether this flight is already in the timetable
         for x in self.flights:
             if x == f or x.flight == f.flight:
-                # don't raise an exception, just do nothing                
+                # don't raise an exception, just do nothing
                 # raise Exception("Flight [{}] already in timetable".
                 # format(x.flight.flight_number))
                 return False
@@ -512,67 +522,67 @@ class Timetable:
 
         self.next_start_day = f.available_day
         self.available_time = f.available_time
-        
+
         return True
-                
+
     def __add__(self, f):
         out = copy.copy(self)
         out.flights = copy.copy(self.flights)
         out.append(f)
 
         return out
-        
+
     def __str__(self):
         out = "[\n"
         for e in self.flights:
             out += str(e)
         return (out + "]\nNext start day: {}; "
                         "Next available: {}; "
-                        "Total time: {}".format(self.next_start_day, 
+                        "Total time: {}".format(self.next_start_day,
                                      self.available_time, self.total_time())
             )
-                        
+
     def lex(self):
         """return ordered comma-separated list of flights in this timetable"""
-        return ",".join(sorted(map(lambda x: x.flight.flight_number, 
+        return ",".join(sorted(map(lambda x: x.flight.flight_number,
                                    self.flights)))
 
     """return comma-separated list of flights in this timetable"""
     def seq(self):
-        return ",".join(map(lambda x: x.flight.flight_number, self.flights))       
-    
-    """return a full json representation of timetable as shown below    
-		{
-			"game_id": "162",
-			"timetable_id": "42",
-			"base_airport_iata": "SCL",
-			"fleet_type_id": "o8",
-			"timetable_name": "CC-MAA",
-			"fleet_type" : "A330/A340",
-			"base_turnaround_delta": "00:45",
-	
-			"entries" :
-			[
-				{
-					"flight_number": "QV405",
-					"start": "09:10",
-					"earliest": "21:45",
-					"padding": "00:00",
-					"dest": "LIM",
-					"day": 1
-				},
-				
-				{
-					"flight_number": "QV489",
-					"start": "21:15",
-					"earliest": "09:10",
-					"padding": "00:00",
-					"dest": MAN",
-					"day": 1
-				},
-				...
-			]
-		}
+        return ",".join(map(lambda x: x.flight.flight_number, self.flights))
+
+    """return a full json representation of timetable as shown below
+	{
+		"game_id": "162",
+		"timetable_id": "42",
+		"base_airport_iata": "SCL",
+		"fleet_type_id": "o8",
+		"timetable_name": "CC-MAA",
+		"fleet_type" : "A330/A340",
+		"base_turnaround_delta": "00:45",
+
+		"entries" :
+		[
+			{
+				"flight_number": "QV405",
+				"start": "09:10",
+				"earliest": "21:45",
+				"padding": "00:00",
+				"dest": "LIM",
+				"day": 1
+			},
+			
+			{
+				"flight_number": "QV489",
+				"start": "21:15",
+				"earliest": "09:10",
+				"padding": "00:00",
+				"dest": MAN",
+				"day": 1
+			},
+			...
+		]
+	}
     """
     def to_dict(self):
         out = OrderedDict()
@@ -586,43 +596,43 @@ class Timetable:
         #    self.base_turnaround_delta + self.fleet_type.min_turnaround)
         out["base_turnaround_delta"] = time_to_str(
             self.base_turnaround_delta)
-        
+
         out["entries"] = list(map(lambda z: z.to_dict(), self.flights))
         #out.entries = self.flights
-        
+
         return out
-    
+
     def to_list(self):
         return [e.flight.flight_number for e in self.flights]
-        
+
     def to_json(self):
         return json.dumps(self.to_dict(), indent=4)
 
     def isEmpty(self):
         return len(self.flights) == 0
-        
+
     """find aggregate utilisation (ish)"""
     def total_time(self):
-        return reduce(lambda a, x: a + x.getLength(), 
+        return reduce(lambda a, x: a + x.getLength(),
                       self.flights, timedelta(0,0))
 
     """available time left in the week"""
     def remaining(self):
-        return (timedelta(days=7) 
-                - self.total_time() 
+        return (timedelta(days=7)
+                - self.total_time()
                 - self.base_turnaround_length)
 
     def hasMaintenance(self):
         for entry in self.flights:
             if entry.flight.isMaintenance:
                 return True
-                
+
         return False
-        
+
     def recalc(self):
         if len(self.flights) == 0:
             return
-            
+
         last_start_time = self.start_time
         self.flights[0].start_day = last_start_day = 1
         for entry in self.flights:
@@ -637,15 +647,14 @@ class Timetable:
         #print("ratio = {:.2}%".format(self.total_time().total_seconds()/(7 * 86400) * 100.0))
         if (self.total_time().total_seconds()/(7 * 86400) < threshold):
             return False
-            
+
         if (self.total_time().total_seconds() > (7 * 86400)):
             return False
-        
+
         return self.hasMaintenance()
-        
+
     def getMetaData(self):
         return [f.metaScore.get() for f in self.flights]
-        
+
     def getScore(self):
         return sum(self.getMetaData())
-        

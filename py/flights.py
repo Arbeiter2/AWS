@@ -105,7 +105,8 @@ class Flight:
     def getInbound(self):
         return (reduce(lambda x, y: x+y, 
             map(lambda x: x['sector_length'], self.sectors["inbound"]))
-            + (len(self.sectors["inbound"]) - 1) * self.fleet_type.min_turnaround)
+            + (len(self.sectors["inbound"]) - 1) * 
+                   self.fleet_type.min_turnaround)
         
     def length(self):
         """an indicative length for a full rotation, including base 
@@ -123,7 +124,7 @@ class Flight:
 stores details of all flights available from provided source
 """
 class FlightManager:
-    def __init__(self, source):
+    def __init__(self, source, build=True):
         if not isinstance(source, DataSource):
             raise Exception("No valid data source provided")
             
@@ -134,8 +135,9 @@ class FlightManager:
         self.fleet_types = {}
         self.MTXFlights = {}
         
-        self.getFlights()
-        print(self.flights)
+        if build:
+            self.getFlights()
+        #print(self.flights)
         
     """
     get flight data from data source
@@ -343,6 +345,20 @@ class FlightCollection:
                                     key=lambda x: self.flights[x].length,
                                     reverse=True)
 
+    
+    """
+    delete all flights exceeding specified distance in nm
+    """
+    def setMaxRange(self, max_range):
+        if not isinstance(max_range, int) or max_range <= 0:
+            return
+            
+        for i in range(0, len(self.deleted)):
+            if (not self.deleted[i] 
+                and self.flights[i].distance_nm <= max_range):
+                self.deleted[i] = True
+            
+            
     """
     returns a non-deleted flight of shorter or equal total duration than 
     provided timespan

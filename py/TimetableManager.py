@@ -45,22 +45,15 @@ class TimetableManager:
                 raise Exception("TimetableManager: No data source provided")
             self.source = source
             self.fMgr = FlightManager(self.source)
-            self.fMgr.getFlights()
            
         self.game_id = self.source.game_id        
         self.routes = {}
-        self.ignore_base_timetables = False
         self.timetables = {}
         
         if build:        
             self.getTimetables()
 
         
-    def setIgnoreBaseTimetables(self, status):
-        if not isinstance(status, bool):
-            raise Exception("Bad value passed to setIgnoreBaseTimetables")
-            
-        self.ignore_base_timetables = status
 
     """
     loads flights and timetable data into a TimetableManager
@@ -134,7 +127,8 @@ class TimetableManager:
     create FlightCollection for given base/fleet pair
     """
     def getFlightCollection(self, base_airport_iata, fleet_type_id,
-                            exclude_flights=None):
+                            exclude_flights=None, max_range=None,
+                            ignore_base_timetables=False):
         if (base_airport_iata not in self.fMgr.flights 
          or fleet_type_id not in self.fMgr.flights[base_airport_iata]):
             return None
@@ -155,7 +149,7 @@ class TimetableManager:
         
         # if ignore_base_timetables is not set, we remove timetabled
         # flights from fltCln
-        if (not self.ignore_base_timetables
+        if (not ignore_base_timetables
             and base_airport_iata in self.timetables
             and fleet_type_id in self.timetables[base_airport_iata]):
             for ttObj in self.timetables[base_airport_iata][fleet_type_id]:
@@ -171,6 +165,11 @@ class TimetableManager:
             for x in exclude_flights:
                 if isinstance(x, str) and x != 'MTX':
                     fltCln.deleteByFlightNumber(x)
+                    
+        # set max range if supplied
+        if isinstance(max_range, int) and max_range > 0:
+            fltCln.setMaxRange(max_range) 
+                    
                     
         return fltCln
 
@@ -305,7 +304,7 @@ class TimetableManager:
     
     looks for conflicts between a timetable entry and all other entries
     """    
-    def hasConflicts(self, ttEntry):
+    def hasConflicts(self, ttEntry, ignore_base_timetables=False):
         debug = False
         if not isinstance(ttEntry, TimetableEntry):
             raise Exception("Bad arg passed to TimetableManager.hasConflicts")
@@ -315,7 +314,7 @@ class TimetableManager:
             return False        
 
         # check timetables from this base if ignore_base_timetables not set
-        if not self.ignore_base_timetables:
+        if not ignore_base_timetables:
             key = "{}-{}".format(ttEntry.flight.base_airport.iata_code,
                 ttEntry.flight.dest_airport.iata_code)
 

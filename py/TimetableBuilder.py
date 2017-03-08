@@ -248,10 +248,10 @@ class TimetableBuilder:
                         self.flight_lookup[x][fleet_type_id]))
                     fltCln.delete(self.flight_lookup[x][fleet_type_id])
 
-        tt = Timetable(None, self.game_id, None,
+        tt = Timetable(ttMgr, None, self.game_id, None,
                        self.airports[base_airport_iata],
                        self.fleet_types[fleet_type_id], start_time,
-                       ttMgr, base_turnaround_delta, max_range)
+                       base_turnaround_delta, max_range)
         tt.graveyard = graveyard
 
         # not seen at this time vv
