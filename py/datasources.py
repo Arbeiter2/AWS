@@ -29,6 +29,54 @@ class DataSource:
     def getTimetables(self):
         pass
     
+    """
+    static function for checking contents of timetable dict
+    
+    should be used within writeTimetables
+    
+    can handle single dict or list of dicts
+    """
+    def validateTimetable(jsonList):
+        if isinstance(jsonList, str):
+            jsonList = json.loads(jsonList)
+            
+        if not isinstance(jsonList, list):
+            jsonList = [jsonList]
+            
+        ttFields = ["game_id", "base_airport_iata", "fleet_type_id", 
+                    "timetable_name", "base_turnaround_delta", "entries"]
+        
+        entryFields = ["flight_number", "dest_airport_iata", "start_time", 
+                       "start_day", "earliest_available", "post_padding"]
+        
+        try:
+            for tt in jsonList:
+                if not isinstance(tt, dict()):
+                    raise Exception("not a dict {}".format(str(tt)))
+                    
+                # verify all required fields
+                if not all(x in tt for x in ttFields):
+                    raise Exception("missing mandatory fields: "
+                                    "{}".format(str(tt)))
+    
+                if not isinstance(tt.entries, list):
+                    raise Exception("bad entries: {}".format(str(tt.entries)))
+    
+                for e in tt.entries:
+                    if not all (x in e for x in entryFields):                
+                        raise Exception("bad entry: {}".format(str(e)))
+        except Exception as exc:
+            print("writeTimetable: ", exc)
+            return False
+        
+        return True
+    
+    def writeTimetables(self, jsonList):
+        return False
+
+"""
+use RESTful data source
+"""
 class RESTDataSource(DataSource):
     def __init__(self, game_id, uri_base):
         super().__init__(game_id)
@@ -72,14 +120,29 @@ class RESTDataSource(DataSource):
 
     
     def getTimetables(self):
-        uri =  self.uri_base + self.game_id + "/timetables/all"
+        uri = self.uri_base + self.game_id + "/timetables/all"
         r = requests.get(uri)
         if r.status_code != 200:
             return False
 
         return json.loads(r.text)['timetables']
-
     
+    def writeTimetables(self, jsonList):
+
+        if not DataSource.validateTimetable(jsonList):
+            return False
+        
+        uri = self.uri_base + self.game_id + "/timetables"
+        r = requests.post(uri)
+        if r.status_code != 200:
+            return False
+        else:
+            return True
+
+
+"""
+access MySQL database directly
+"""
 class DBDataSource(DataSource):
     
     def __init__(self, game_id, db_user='mysql', db_pass='password', 
@@ -257,3 +320,63 @@ class DBDataSource(DataSource):
             timetables[timetable_id]['entries'].append(e)
             
         return timetables.values()
+    
+
+    def writeTimetables(self, jsonList):
+
+        if not DataSource.validateTimetable(jsonList):
+            return False
+
+        if isinstance(jsonList, str):
+            jsonList = json.loads(jsonList)
+            
+        if not isinstance(jsonList, list):
+            jsonList = [jsonList]
+            
+        for tt in jsonList:
+            query = '''
+            INSERT INTO timetables (game_id, base_airport_iata, 
+            fleet_type_id, timetable_name, base_turnaround_delta, 
+            last_modified)
+            VALUES ({}, '{}', {}, '{}', '{}', '{}', NOW())
+            '''.format(tt.game_id, tt.base_airport_iata, tt.fleet_type_id,
+                       tt.timetable_name,
+                       tt.base_turnaround_delta)
+    
+            # print(query)
+            self.cursor.execute(query)
+    
+            tt.timetable_id = self.cursor.lastrowid
+    
+            # timetable_entries rows
+            entries = []
+    
+            for x in tt.entries:
+                txt = "({}, '{}', '{}', '{}', '{}', '{}', '{}')".format(
+                    tt.timetable_id, x.flight_number,
+                    x.dest_airport_iata,
+                    x.outbound_dep,
+                    x.start_day, x.available_time,
+                    x.post_padding)
+                
+                entries.append(txt)
+    
+   
+            query = '''
+            INSERT INTO timetable_entries (timetable_id, flight_number, 
+            dest_airport_iata, start_time, start_day, earliest_available, 
+            post_padding)
+            VALUES {}
+            '''.format(", ".join(entries))
+            # print(query)
+    
+            self.cursor.execute(query)
+    
+            if self.cnx.in_transaction:
+                self.cnx.commit()
+            self.cursor.close()
+            self.cnx.close()
+            
+            return True
+
+    

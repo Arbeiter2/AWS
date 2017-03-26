@@ -6,7 +6,8 @@ import os
 import sys, getopt
 from datasources import RESTDataSource, DBDataSource
 from flights import FlightManager
-from TimetableManager import TimetableManager
+from timetables import TimetableManager
+from gatimetable import GATimetable
 
 types = {
     'F50' : 37, 
@@ -25,6 +26,11 @@ types = {
 def usage():
     print(
     "Usage: {}\n"
+    "\nMandatory:\n"
+      "\t\t[-g/game-id=] <game-id>\n"
+      "\t\t[-b/--base=] <base-iata-code>\n"
+      "\t\t[-f/--fleet-type=] <icao fleet code> ({})\n"
+      
     "Data source - database\n"
       "\t\t[-H/--db-host=] <database-hostname>\n"
       "\t\t[-D/--db-name=] <database-name>\n"
@@ -34,10 +40,8 @@ def usage():
     "\nData source - REST\n"
       "\t\t[-u/--uri=] <URL-stub>\n"
 
-    "\nMandatory:\n"
-      "\t\t[-g/game-id=] <game-id>\n"
-      "\t\t[-b/--base=] <base-iata-code>\n"
-      "\t\t[-f/--fleet-type=] <icao fleet code> ({})\n"
+    "\nMode\n"
+      "\t\t[-B/--build-mode=] [append | genetic ]\n"
 
     "\nOptional\n"
       "\t\t[-s/--start-time] <HH:MM>\n"
@@ -58,19 +62,21 @@ def usage():
         "|".join(sorted(list(types.keys()))),
         ));
 
+    sys.exit(1)
 
 if __name__ == '__main__':    
     try:
         opts, args = getopt.getopt(sys.argv[1:], 
-            "hg:b:f:s:t:m:c:d:rwiNQMj:x:GH:D:U:P:u:",
+            "hg:b:f:s:t:m:c:d:rwiNQMj:x:GH:D:U:P:u:B:",
             ["game-id=","base=", "fleet-type=", "start-time=", "threshold=", 
             "max-range=", "count=", "turnaround-delta=", "rebuild", "write",
             "no-shuffle", "no-queue", "exclude=", "no-graveyard", "json",
-            "db-host=", "db-name=", "db-user=", "db-pass=", "uri="])
+            "db-host=", "db-name=", "db-user=", "db-pass=", "uri=", 
+            "build-mode="])
     except getopt.GetoptError as err:
         print(err)  
         usage()
-        sys.exit(2)
+        
 
     game_id = base = fleet_type_id = None
     db_host = db_name = db_user = db_pass = uri = None
@@ -88,6 +94,7 @@ if __name__ == '__main__':
     ignore_base_timetables = False
     add_mtx_gap = False
     write_json= None
+    build_mode = "append"
 
     
     for o, a in opts:
@@ -110,6 +117,11 @@ if __name__ == '__main__':
             base = a.upper()
         elif o in ("-f", "--fleet-type"):
             fleet_type_id = types.get(a.upper(), None)
+        elif o in ("-B", "--build-mode"):
+            if a == "append" or a == "genetic":
+                build_mode = a
+            else:
+                usage()
         elif o in ("-s", "--start-time"):
             start_time = a
         elif o in ("-d", "--turnaround-delta"):
@@ -120,7 +132,6 @@ if __name__ == '__main__':
             max_range = int(a)
             if max_range <= 0:
                 usage()
-                sys.exit(1)
         elif o in ("-c", "--count="):
             count = int(a)
             if count < 0:
@@ -136,13 +147,12 @@ if __name__ == '__main__':
             else:
                 print("Bad dir "+a)
                 usage()
-                sys.exit(1)
         elif o in ("-N", "--no-shuffle"):
             shuffle = False
         elif o in ("-Q", "--no-queue"):
             use_rejected = False
         elif o in ("-i", "--ignore"):
-            ignore_base_timetables = False
+            ignore_base_timetables = True
         elif o in ("-x", "--exclude"):
             exclude = a.split(",")
         elif o in ("-M", "--mtx-gap"):
@@ -154,7 +164,6 @@ if __name__ == '__main__':
             
     if not game_id or not base or not fleet_type_id:
         usage()
-        sys.exit()
         
     source = None
     if (db_host and db_name and db_user and db_pass):
@@ -169,19 +178,24 @@ if __name__ == '__main__':
     #    base_turnaround_delta, max_range, rebuild_all, writeToDatabase)
 
     flightMgr = FlightManager(source)
+    flightMgr.getFlights()
     timetableMgr = TimetableManager(source, flightMgr)
     
-
-    builder = TimetableBuilder(flightMgr, timetableMgr, shuffle=shuffle, 
-                               use_rejected=use_rejected)
-    
-    try:
-        builder(base_airport_iata=base, fleet_type_id=fleet_type_id, 
-            start_time=start_time, threshold=threshold, count=count,
-            base_turnaround_delta=base_turnaround_delta, rebuild=rebuild_all,
-            exclude_flights=exclude, writeToDB=writeToDatabase, 
-            ignore_base_timetables=ignore_base_timetables, jsonDir=write_json,
-            add_mtx_gap=add_mtx_gap, graveyard=graveyard)
-    except Exception as e:
-        print("Exception: "+str(e))
+    if build_mode == "append":
+        builder = TimetableBuilder(flightMgr, timetableMgr, shuffle=shuffle, 
+                                   use_rejected=use_rejected)
         
+        builder(base_airport_iata=base, fleet_type_id=fleet_type_id, 
+                start_time=start_time, threshold=threshold, count=count,
+                base_turnaround_delta=base_turnaround_delta, 
+                rebuild=rebuild_all, exclude_flights=exclude, 
+                writeToDB=writeToDatabase, jsonDir=write_json,
+                ignore_base_timetables=ignore_base_timetables, 
+                add_mtx_gap=add_mtx_gap, graveyard=graveyard)
+    
+    elif build_mode == "genetic":
+        builder = GATimetable(timetableMgr, flightMgr)
+        
+        builder.run(base, fleet_type_id, outbound_dep=start_time,
+                    base_turnaround_delta=base_turnaround_delta,
+                    graveyard=graveyard, ignore_existing=True)

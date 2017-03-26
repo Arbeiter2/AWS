@@ -2,10 +2,40 @@ from datetime import timedelta
 from nptime import nptime
 from nptools import str_to_timedelta, str_to_nptime, TimeIsInWindow
 from datasources import DataSource
-import random
+import random as rnd, math
 from functools import reduce
-from copy import deepcopy
-import bitstring
+from itertools import permutations
+import simplejson as json
+#from copy import deepcopy
+
+"""
+utility class for checking operational hours for takeoffs and landings
+"""
+class OpTimes:
+    """avoid takeoffs or landings at times passengers dislike, so we check """
+    """whether those times fall within these "ops" curfew times"""
+    """departure curfew: 00:30 - 05:30"""
+    """arrival curfew: 00:45 - 05:00"""
+    EarliestDep = nptime(5, 45)
+    LatestDep = nptime(0, 30)
+
+    EarliestArr = nptime(5, 00)
+    LatestArr = nptime(0, 30)
+
+    @staticmethod
+    def InDepCurfew(t):
+        if not isinstance(t, nptime):
+            return False
+
+        return TimeIsInWindow(t, OpTimes.LatestDep, OpTimes.EarliestDep)
+
+    @staticmethod
+    def InArrCurfew(t):
+        if not isinstance(t, nptime):
+            return False
+
+        return TimeIsInWindow(t, OpTimes.LatestArr, OpTimes.EarliestArr)
+
 
 
 class FleetType:
@@ -52,6 +82,18 @@ class Airport:
             return False
             
         return TimeIsInWindow(val, self.curfew_start, self.curfew_finish)
+
+    def getRandomStartTime(self):
+        retVal = None
+        rnd.seed()
+        while retVal is None:
+            retVal = nptime(5, 30) + \
+                     timedelta(seconds=rnd.randrange(0, 120) * 300)
+            if self.in_curfew(retVal) or OpTimes.InDepCurfew(retVal):
+                #print("Bad start time {}".format(retVal))
+                retVal = None
+
+        return retVal
         
 class Flight:
     def __init__(self, flight_data):
@@ -119,6 +161,31 @@ class Flight:
             self.flight_number, self.base_airport.iata_code, 
             self.dest_airport.iata_code, self.fleet_type.fleet_icao_code
             )
+        
+    def to_dict(self):
+        out = dict()
+        out['flight_number'] = self.flight_number
+        out['base_airport_iata'] = self.base_airport.iata_code
+        out['dest_airport_iata'] = self.dest_airport.iata_code
+        out['fleet_type_id'] = self.fleet_type.fleet_icao_code
+        out['outbound_length'] = str(self.outbound_length)
+        out['inbound_length'] = str(self.inbound_length)
+        
+        return out
+    
+    def to_json(self):
+        return json.dumps(self.to_dict(), indent=4)
+    
+#    def __eq__(self, a):
+#        return (a is not None
+#            and a.flight_number == self.flight_number
+#            and a.base_airport.iata_code == self.base_airport.iata_code
+#            and a.dest_airport.iata_code == self.dest_airport.iata_code
+#            and a.fleet_type.fleet_type_id == self.fleet_type.fleet_type_id
+#            and a.outbound_length == self.outbound_length
+#            and a.inbound_length == self.inbound_length)
+#        return (isinstance(a, Flight) and self.to_dict() == a.to_dict())
+
 
 """
 stores details of all flights available from provided source
@@ -250,6 +317,7 @@ class FlightManager:
             if not flight_number in self.flight_lookup:
                 self.flight_lookup[flight_number] = {}
             self.flight_lookup[flight_number][fleet_type_id] = Flight(f)
+            #print(self.flight_lookup[flight_number][fleet_type_id].to_json())
 
             # only flights with desired fleet_type_id added to collection
             flightCln.append(self.flight_lookup[flight_number][fleet_type_id])
@@ -310,20 +378,20 @@ class FlightCollection:
     def __init__(self, base_airport, shuffle =True):
         self.base_airport = base_airport        
         self.shuffle = shuffle
-        self.flights = [None] # location 0 reserved for MTX
-        self.deleted = [False] # location 0 reserved for MTX
-        self.indexMap = dict()
-        self.indexMap['MTX'] = 0
+
+        self.lexIndex = []
         self.durationIndex = []
         self.MTXEntry = None
+        self.flights = dict()
+        self.deleted = dict()
         
     def clone(self):
         out = FlightCollection(self.base_airport, self.shuffle)
-        out.flights = deepcopy(self.flights)
-        out.deleted = deepcopy(self.deleted)
-        out.indexMap = deepcopy(self.indexMap)
-        out.durationIndex = deepcopy(self.durationIndex)
+        out.flights = self.flights.copy()
+        out.deleted = self.deleted.copy()
+
         out.MTXEntry = self.MTXEntry
+        out.buildDurationIndex()
         
         return out
         
@@ -333,19 +401,46 @@ class FlightCollection:
             
         if (f.isMaintenance):
             self.MTXEntry = f
-            self.flights[0] = f
-        else:
-            self.flights.append(f)
-            self.deleted.append(False)
-            self.indexMap[f.flight_number] = len(self.flights) - 1
 
-    """index of flights in descending order"""
-    def buildDurationIndex(self):
-        self.durationIndex = sorted(range(len(self.flights)),
-                                    key=lambda x: self.flights[x].length,
-                                    reverse=True)
+        self.flights[f.flight_number] = { 
+                                          'flight' : f, 
+                                          'deleted' : False,
+                                          'length' : f.length()
+                                        }
+        self.deleted[f.flight_number] = False
+        
+    
+    """
+    eliminate entries completely, rather than mark deleted
+    """
 
     
+    """
+    eliminate entries completely, rather than mark deleted
+    """
+    def destroyFlightNumbers(self, deletions):
+        if deletions is None:
+            return False
+        
+        try:
+            iter(deletions)
+            if len(deletions) == 0:
+                return False
+        except:
+            deletions = [deletions]
+            
+        for k in deletions:
+            try:
+                del self.flights[k]
+                del self.deleted[k]
+            except KeyError:
+                pass
+            
+        self.buildDurationIndex()
+        
+        return True
+
+            
     """
     delete all flights exceeding specified distance in nm
     """
@@ -353,12 +448,18 @@ class FlightCollection:
         if not isinstance(max_range, int) or max_range <= 0:
             return
             
-        for i in range(0, len(self.deleted)):
-            if (not self.deleted[i] 
-                and self.flights[i].distance_nm <= max_range):
-                self.deleted[i] = True
-            
-            
+        for f in self.flights:
+            if self.flights[f].distance_nm > max_range:
+                del self.deleted[f]
+                del self.flights[f]
+
+ 
+    """index of flights in descending order"""
+    def buildDurationIndex(self):
+        self.durationIndex = sorted(self.flights.keys(),
+                                    key=lambda x: self.flights[x]['length'],
+                                    reverse=True)
+
     """
     returns a non-deleted flight of shorter or equal total duration than 
     provided timespan
@@ -367,46 +468,50 @@ class FlightCollection:
     if random is True, first shorter flight is returned
     if no shorter flight available, return None
     """
-    def getShorterFlight(self, fltLength, random=False):
+    def getShorterFlight(self, fltLength, isRandom=False):
         if fltLength is None or not isinstance(fltLength, timedelta):
             return None
             
-        if random:
-            vals = range(0, len(self.flights))
+        if isRandom:
+            rndIndex = rnd.randint(1, math.factorial(len(self.flights))-1)
+            vals = list(permutations(self.flights.keys()))[rndIndex]
         else:
             vals = self.durationIndex
         
         for i in vals:
-            if not self.deleted[i] and self.flights[i].length <= fltLength:
-                return self.flights[i]
-            
+            x = self.flights[i]['flight']
+            print("{}: test {}".format(__name__, x.flight_number))
+            if not self.deleted[i] and self.flights[i]['length'] <= fltLength:
+                print("{}: return {}".format(__name__, x.flight_number))
+                return x
+        print("{}: No more valid flights".format(__name__))
         return None
+    
+    def delCount(self):
+        return self.deleted.values().count(True)
             
         
-    def deleteByFlightNumber(self, flight_number):
-        for f in self.flights:
-            if f.flight_number == flight_number:
-                self.setDeletedState(f, True) 
-            
     def delete(self, f):
-        self.setDeletedState(f, True)
+#        print("-{}/".format(f.flight_number), end='')
+#        if re.search('317', f.flight_number):
+#            print('[@{}] '.format(f.flight_number), end='')
+        self.deleted[f.flight_number] = True
+        self.flights[f.flight_number]['deleted'] = True
+#        print("{} ".format(list(self.deleted.values()).count(True)), end='')
         
     def undelete(self, f):
-        self.setDeletedState(f, False)
+#        print("+{}/".format(f.flight_number), end='')
+        self.deleted[f.flight_number] = False
+        self.flights[f.flight_number]['deleted'] = False
+#        print("{} ".format(list(self.deleted.values()).count(True)), end='')
 
-    def setDeletedState(self, f, state):
-        if f not in self.flights:
-            return
-            
-        self.deleted[self.flights.index(f)] = state
-        
     def __iter__(self):
         return FlightCollectionIter(self)
 
     def __str__(self):
         out = ""
-        for f in self.flights:
-            out = out + f.flight_number + "\n"
+        for f in self.flights.values():
+            out = out + f.flight.flight_number + "\n"
         return out
         
     def releaseMTX(self):
@@ -414,50 +519,30 @@ class FlightCollection:
             self.undelete(self.MTXEntry)
 
     def reset(self):
-        for i in range(0, len(self.deleted)):
+        for i in self.deleted:
             self.deleted[i] = False
-            
-    def getIndex(self, flight_number):
-        return self.indexMap.get(flight_number)
-            
-    def __getitem__(self, key):
-        if key in range(0, len(self.flights)):
-            return self.flights[key]
-        else:
-            return None
+            self.flights[i]['deleted'] = False
             
     def __len__(self):
-        length = 0
-        for x in range(0, len(self.flights)):
-            if not self.deleted[x]:
-                length += 1
-        return length
+        return len(self.deleted) - list(self.deleted.values()).count(True)
+
     
     def total_time(self):
         out = timedelta(0, 0)
-        for x in range(1, len(self.flights)):
-            if not self.deleted[x]:
-                out += (self.flights[x].outbound_length + 
-                2 * self.flights[x].turnaround_length + 
-                self.flights[x].inbound_length) 
+        for x in self.flights.values():
+            if not x['deleted']:
+                out += x['flight'].length()
         return out
-        
-    def toBitstring(self):
-        return ~(bitstring.Bits(self.deleted))
             
     def status(self):
-        available = []
-        deleted = []
-        for i in range(1, len(self.flights)):
-            if self.deleted[i]:
-                deleted.append(self.flights[i].flight_number)
-            else:
-                available.append(self.flights[i].flight_number)
-        
+        available = filter(lambda x: self.deleted[x] == False, 
+                         self.deleted.keys())
+        deleted = filter(lambda x: self.deleted[x] == True, 
+                         self.deleted.keys())
         return "Available: {}\nDeleted: {}".format(
-                " ".join(available), " ".join(deleted)
+                " ".join(sorted(available)), " ".join(sorted(deleted))
                 )
-                
+
     def setShuffle(self, status):
         self.shuffle = status
                 
@@ -470,21 +555,40 @@ class FlightCollectionIter:
         self.pos = 0
         self.available = []
         self.coll = flightCollection
-        for i in range(0, len(self.coll.deleted)):
-            if not self.coll.deleted[i]:
-                self.available.append(i)
+#        print("### new FlightCollectionIter {}/{}".format(
+#                list(self.coll.deleted.values()).count(True),
+#                list(filter(lambda x: self.coll.deleted[x], 
+#                            self.coll.deleted))))
+        self.available = list(filter(lambda k: not self.coll.deleted[k], 
+                                self.coll.deleted))
         
         # shuffle to make it interesting
         if self.coll.shuffle:
-            random.shuffle(self.available)
+            rnd.shuffle(self.available)
         
     def __iter__(self):
         return self
-        
+
     def __next__(self):
         if self.pos < len(self.available):
-            retVal = self.coll.flights[self.available[self.pos]]
+            retVal = self.coll.flights[self.available[self.pos]]['flight']
             self.pos += 1
             return retVal
         else:
-            raise StopIteration()
+            raise StopIteration()        
+
+    def __next2u__(self):
+        self.pos += 1
+        print("__iter__({}) {} ".format(self.pos, 
+              self.coll.deleted.count(True)), end='')
+
+        while self.pos < len(self.coll.deleted):
+            print("[{}]/{}/{} ".format(self.pos, 
+                    self.coll.flights[self.pos].flight_number, 
+                    self.coll.deleted[self.pos]), end='')
+            if self.coll.deleted[self.pos] == True:
+                self.pos += 1
+                continue
+            else:
+                return self.coll.flights[self.pos]
+        raise StopIteration()
