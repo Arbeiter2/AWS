@@ -78,7 +78,7 @@ if __name__ == '__main__':
         usage()
         
 
-    game_id = base = fleet_type_id = None
+    game_id = base_airport_iata = fleet_type_id = None
     db_host = db_name = db_user = db_pass = uri = None
     start_time = None
     base_turnaround_delta = None
@@ -114,7 +114,7 @@ if __name__ == '__main__':
         elif o in ("-g", "--game-id"):
             game_id = a
         elif o in ("-b", "--base"):
-            base = a.upper()
+            base_airport_iata = a.upper()
         elif o in ("-f", "--fleet-type"):
             fleet_type_id = types.get(a.upper(), None)
         elif o in ("-B", "--build-mode"):
@@ -162,7 +162,7 @@ if __name__ == '__main__':
         else:
             assert False, "unhandled option"
             
-    if not game_id or not base or not fleet_type_id:
+    if not game_id or not base_airport_iata or not fleet_type_id:
         usage()
         
     source = None
@@ -185,7 +185,8 @@ if __name__ == '__main__':
         builder = TimetableBuilder(flightMgr, timetableMgr, shuffle=shuffle, 
                                    use_rejected=use_rejected)
         
-        builder(base_airport_iata=base, fleet_type_id=fleet_type_id, 
+        builder(base_airport_iata=base_airport_iata, 
+                fleet_type_id=fleet_type_id, 
                 start_time=start_time, threshold=threshold, count=count,
                 base_turnaround_delta=base_turnaround_delta, 
                 rebuild=rebuild_all, exclude_flights=exclude, 
@@ -196,6 +197,6 @@ if __name__ == '__main__':
     elif build_mode == "genetic":
         builder = GATimetable(timetableMgr, flightMgr)
         
-        builder.run(base, fleet_type_id, outbound_dep=start_time,
+        builder.run(base_airport_iata, fleet_type_id, outbound_dep=start_time,
                     base_turnaround_delta=base_turnaround_delta,
                     graveyard=graveyard, ignore_existing=True)

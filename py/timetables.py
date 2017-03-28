@@ -7,11 +7,9 @@ from nptools import (str_to_timedelta, str_to_nptime, TimeIsInWindow,
 import re
 from datasources import DataSource
 from collections import OrderedDict
-import itertools
 from functools import reduce
 import copy
 import random as rnd
-import pdb
 import json
 import math
 
@@ -460,12 +458,15 @@ class Timetable:
             timetable_name=self.timetable_name,
             base_airport=self.base_airport,
             fleet_type=self.fleet_type,
-            outbound_dep=self.outbound_dep,
+            outbound_dep=self.start_time,
             base_turnaround_delta=self.base_turnaround_delta,
             graveyard=self.graveyard,
             max_range=self.max_range)
 
         newTT.flights = [e.clone() for e in self.flights]
+        newTT.recalc()
+        
+        return newTT
 
     """
     create a random timetable from available flights, starting with MTX,
@@ -481,27 +482,25 @@ class Timetable:
                 self.ttManager.fMgr.MTXFlights[self.base_airport.iata_code]
                 [self.fleet_type.fleet_type_id]
                 )
-        self.append(TimetableEntry(mtx, self))
+        self.appendFlight(mtx)
         self.recalc()
 
         # randomly choose available flights until nothing else can be added
         while True:
             newFlight = fltCln.getShorterFlight(self.remaining(), True)
-            print("randomise {}".format(newFlight))
+            #print("randomise {}".format(newFlight))
             if newFlight is None:
                 break
             else:
                 fltCln.delete(newFlight)
                 self.appendFlight(newFlight)
                 self.recalc()
-            print(self)
 
         # permute order
-        self.flights = list(list(itertools.permutations(self.flights))[
-                rnd.randint(1, math.factorial(len(self.flights)))
-                ])
+        rnd.shuffle(self.flights)
         self.recalc()
-        
+        print(self)
+       
         return self
 
 

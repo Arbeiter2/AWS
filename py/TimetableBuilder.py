@@ -225,6 +225,7 @@ class TimetableBuilder:
         
         # modify maintenance flight to include turnaround
         ttMgr.setMTXGapStatus(base_airport_iata, fleet_type_id, add_mtx_gap)
+        base_airport = self.airports[base_airport_iata]
 
 
         tt = Timetable(ttMgr, None, self.game_id, None,
@@ -316,7 +317,7 @@ class TimetableBuilder:
 
 
                 # print("Removing all timetables and starting again\n")
-                tt.available_time = self.getRandomStartTime(base_airport_iata)
+                tt.available_time = base_airport.getRandomStartTime()
                 tt.start_time = tt.available_time
 
                 if (index >= 2):

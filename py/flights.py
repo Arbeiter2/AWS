@@ -2,9 +2,8 @@ from datetime import timedelta
 from nptime import nptime
 from nptools import str_to_timedelta, str_to_nptime, TimeIsInWindow
 from datasources import DataSource
-import random as rnd, math
+import random as rnd
 from functools import reduce
-from itertools import permutations
 import simplejson as json
 #from copy import deepcopy
 
@@ -468,23 +467,28 @@ class FlightCollection:
     if random is True, first shorter flight is returned
     if no shorter flight available, return None
     """
-    def getShorterFlight(self, fltLength, isRandom=False):
+    def getShorterFlight(self, fltLength, isRandom=False, debug=False):
         if fltLength is None or not isinstance(fltLength, timedelta):
             return None
             
+        vals = self.durationIndex[:]
         if isRandom:
-            rndIndex = rnd.randint(1, math.factorial(len(self.flights))-1)
-            vals = list(permutations(self.flights.keys()))[rndIndex]
-        else:
-            vals = self.durationIndex
+            rnd.shuffle(vals)
+        
+        if debug:
+            print("getShorterFlight({})".format(str(fltLength)))
+            
         
         for i in vals:
             x = self.flights[i]['flight']
-            print("{}: test {}".format(__name__, x.flight_number))
+            if debug:
+                 print("\t{} length={} deleted={}".format(x.flight_number, 
+                       self.flights[i]['length'], self.deleted[i]))
             if not self.deleted[i] and self.flights[i]['length'] <= fltLength:
-                print("{}: return {}".format(__name__, x.flight_number))
+                if debug:
+                    print("getShorterFlight: return {}".format(x.flight_number))
                 return x
-        print("{}: No more valid flights".format(__name__))
+        #print("{}: No more valid flights".format(__name__))
         return None
     
     def delCount(self):
@@ -507,6 +511,9 @@ class FlightCollection:
 
     def __iter__(self):
         return FlightCollectionIter(self)
+    
+    def ordered(self):
+        return OrderedFlightIter(self)
 
     def __str__(self):
         out = ""
@@ -577,18 +584,30 @@ class FlightCollectionIter:
         else:
             raise StopIteration()        
 
-    def __next2u__(self):
-        self.pos += 1
-        print("__iter__({}) {} ".format(self.pos, 
-              self.coll.deleted.count(True)), end='')
 
-        while self.pos < len(self.coll.deleted):
-            print("[{}]/{}/{} ".format(self.pos, 
-                    self.coll.flights[self.pos].flight_number, 
-                    self.coll.deleted[self.pos]), end='')
-            if self.coll.deleted[self.pos] == True:
-                self.pos += 1
-                continue
-            else:
-                return self.coll.flights[self.pos]
-        raise StopIteration()
+
+
+
+"""
+iterator for all flights in a FlightCollection in duration order
+"""       
+class OrderedFlightIter:
+    def __init__(self, flightCollection):
+        """add the indexes of all non-deleted flights"""
+        self.pos = 0
+        self.available = []
+        self.coll = flightCollection
+        self.available = list(filter(lambda k: not self.coll.deleted[k], 
+                                self.coll.durationIndex))
+
+        
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.pos < len(self.available):
+            retVal = self.coll.flights[self.available[self.pos]]['flight']
+            self.pos += 1
+            return retVal
+        else:
+            raise StopIteration()        

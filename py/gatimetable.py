@@ -4,7 +4,6 @@ from nptools import str_to_timedelta, str_to_nptime
 import math
 from timetables import Timetable, TimetableManager
 import random as rnd
-from itertools import permutations
 from flights import FlightManager, FlightCollection
 
 
@@ -53,6 +52,7 @@ class GATimetable:
                             max_range=max_range,
                             ignore_existing=ignore_existing
                      )
+        fltClns = [origFltCln.clone() for _ in range(0, popSize)]
 
         # popSize random timetables
         popn = [Timetable(
@@ -62,10 +62,8 @@ class GATimetable:
                    outbound_dep=outbound_dep, 
                    base_turnaround_delta=base_turnaround_delta, 
                    max_range=max_range, 
-                   graveyard=graveyard).randomise(origFltCln)
-              for _ in range(0, popSize)]
-    
-        fltClns = [origFltCln.clone() for _ in range(0, popSize)]
+                   graveyard=graveyard).randomise(fltClns[i])
+              for i in range(0, popSize)]
 
         return popn, fltClns
     
@@ -86,6 +84,8 @@ class GATimetable:
         if population[bestIndex].getScore() != 0.0:
             return population, fltClns
         
+        print("Winner:\n{}".format(population[bestIndex]))
+        
         self.ttManager.append(population[bestIndex])
         
         return populateFn()
@@ -102,7 +102,7 @@ class GATimetable:
     def run(self, base_airport_iata, fleet_type_id, outbound_dep=None, 
             base_turnaround_delta=None, max_range=None, 
             add_mtx_gap=True, graveyard=True, ignore_existing=False,
-            popSize=20, maxGenerations=1000, mutProb=0.25,
+            popSize=50, maxGenerations=100, mutProb=0.25,
             eliteProp=0.1):
         if (base_airport_iata not in self.flManager.flights
             or fleet_type_id not in self.flManager.flights[base_airport_iata]):
@@ -164,8 +164,8 @@ class GATimetable:
             scoreIndexes = [b[0] for b in sorted(enumerate(scores),
                             key=lambda i:i[1])]
             
-            maxScore = scoreIndexes[popSize-1]
-            minScore = scoreIndexes[0]
+            maxScore = scores[scoreIndexes[popSize-1]]
+            minScore = scores[scoreIndexes[0]]
             meanScore = sum(scores)/popSize
 
             print("{}:\t{}\t{}\t{}".format(gen, minScore, meanScore, maxScore))
@@ -176,14 +176,14 @@ class GATimetable:
                 
                 # write out winning timetable, and start new iterations
                 popn, fltClns = self.promote(popn, fltClns, 
-                                             scores[scoreIndexes[0]],
+                                             scoreIndexes[0],
                                              populate)
                 continue
 
             newPopn = []
             
             # get elites
-            newPopn.append([popn[i] for i in scoreIndexes[0:eliteCnt]])
+            newPopn.extend([popn[i] for i in scoreIndexes[0:eliteCnt]])
             
             # create remaining children
             for i in range(0, parentCnt):
@@ -196,9 +196,7 @@ class GATimetable:
                 else:
                     localCnt = childCnt
 
-                newPopn.extend([self.biasMutate(parent, 
-                                               fltCln, 
-                                               scores[scoreIndexes[i]])[0] 
+                newPopn.extend([self.biasMutate(parent, fltCln)[0] 
                                 for _ in range(localCnt)])
             
             # replace population
@@ -219,7 +217,7 @@ class GATimetable:
     """
     def adjust(self, tt, score):
         if not isinstance(tt, Timetable):
-            raise Exception("Invalid Timetable")
+            raise Exception("Invalid Timetable [{}]".format(tt))
 
         highestScoringIndex = self.highestScoringIndex(tt)
 
@@ -280,10 +278,11 @@ class GATimetable:
 
         # find element with highest score and swap with something else 
         # from fltCln until we get a lower score
-        while True:
-            newFlight = self.fltCln.getShorterFlight(ofLength, random=False)
-            if newFlight is None:
-                break
+        for newFlight in fltCln.ordered():
+            if newFlight.length() > ofLength:
+                newFlight = None
+                continue
+            #print("{} {}".format(newFlight.flight_number, newFlight.length()))
             tt.flights[highestScoringIndex].flight = newFlight
             tt.recalc()
             
@@ -310,8 +309,8 @@ class GATimetable:
 
         for run in range(0, invertCount):
             # random selection of two points within flight list
-            [startIndex, endIndex] = sorted(rnd.sample(range(len(tt.flights),
-                                                                 2)))
+            [startIndex, endIndex] = sorted(rnd.sample(range(len(tt.flights)),
+                                                                 k=2))
             
             # reverse list segment between start and end
             rev = reversed(tt.flights[startIndex:endIndex])
@@ -339,9 +338,7 @@ class GATimetable:
 
         # use all but the first (zeroth) entry
         for run in range(0, permuteCount):
-            rndIndex = rnd.randint(1, math.factorial(len(tt.flights))-1)
-            flights = list(list(permutations(tt.flights))[rndIndex])
-            tt.flights = flights
+            rnd.shuffle(tt.flights)
             tt.recalc()
 
             if score is None or tt.getScore() < score:
@@ -374,8 +371,14 @@ class GATimetable:
             
         score = parent.getScore()
         
-        tt = parent.clone()
+        #print("biasMutate {}\n{}".format(score, parent))
         
+        tt = parent.clone()
+
+        # aggressive first resort
+        if self.permute(tt, score):
+            return tt, True
+
         if self.adjust(tt, score):
             return tt, True
         
@@ -389,9 +392,6 @@ class GATimetable:
         if self.invert(tt, score):
             return tt, True
 
-        # aggressive last resort
-        if self.permute(tt, score):
-            return tt, True
         
         return tt, False
     
