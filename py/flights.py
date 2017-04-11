@@ -393,7 +393,8 @@ class FlightCollection:
         out.buildDurationIndex()
         
         return out
-        
+    
+       
     def append(self, f):
         if not isinstance(f, Flight) or f is None:
             raise Exception("Bad flight appended to FlightCollection")
@@ -516,10 +517,7 @@ class FlightCollection:
         return OrderedFlightIter(self)
 
     def __str__(self):
-        out = ""
-        for f in self.flights.values():
-            out = out + f.flight.flight_number + "\n"
-        return out
+        return " ".join(sorted(self.flights.keys()))
         
     def releaseMTX(self):
         if self.MTXEntry:

@@ -282,8 +282,7 @@ class TimetableBuilder:
                     break
                 else:
                     # tt.available_time += timedelta(minutes=5)
-                    tt.available_time = self.getRandomStartTime(
-                         base_airport_iata)
+                    tt.available_time = base_airport.getRandomStartTime()
                     
                     tt.start_time = tt.available_time
                      # print(str(x))

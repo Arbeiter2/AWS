@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 
 from nptools import str_to_timedelta, str_to_nptime
-import math
-from timetables import Timetable, TimetableManager
+from datetime import timedelta
+from timetables import Timetable, TimetableEntry, TimetableManager
 import random as rnd
 from flights import FlightManager, FlightCollection
 
@@ -18,7 +18,7 @@ class GATimetable:
     def __init__(self, ttManager=None, flManager=None):
         if (not isinstance(ttManager, TimetableManager)
         or  not isinstance(flManager, FlightManager)):
-            print("##P{} {}".format(str(ttManager), str(FlightManager)))
+            print("#P{} {}".format(str(ttManager), str(FlightManager)))
             raise Exception("GATimetable(): Invalid args")
             
         if not isinstance(flManager, FlightManager):
@@ -46,13 +46,14 @@ class GATimetable:
             return None
         
         # all flight collections will be the same
-        origFltCln = self.ttManager.getFlightCollection(
+        self.origFltCln = self.ttManager.getFlightCollection(
                             base_airport_iata=base_airport.iata_code, 
                             fleet_type_id=fleet_type.fleet_type_id,
                             max_range=max_range,
                             ignore_existing=ignore_existing
                      )
-        fltClns = [origFltCln.clone() for _ in range(0, popSize)]
+        print("origFltCln:\n{}".format(self.origFltCln.status()))
+        fltClns = [self.origFltCln.clone() for _ in range(0, popSize)]
 
         # popSize random timetables
         popn = [Timetable(
@@ -64,6 +65,11 @@ class GATimetable:
                    max_range=max_range, 
                    graveyard=graveyard).randomise(fltClns[i])
               for i in range(0, popSize)]
+        
+#        for x in range(len(popn)):
+#            if popn[x].total_time() < timedelta(days=6):
+#                print("bad news at [{}]\n{}".format(x, popn[x]))
+#            
 
         return popn, fltClns
     
@@ -89,6 +95,57 @@ class GATimetable:
         self.ttManager.append(population[bestIndex])
         
         return populateFn()
+    
+    """
+    get scores for a given population
+    """
+    def getScores(self, popn):
+        popSize = len(popn)
+        scores = [tt.getScore() for tt in popn]
+                  
+        # list indexes in sorted order
+        scoreIndexes = [b[0] for b in sorted(enumerate(scores),
+                        key=lambda i:i[1])]
+        
+        maxScore = scores[scoreIndexes[popSize-1]]
+        minScore = scores[scoreIndexes[0]]
+        meanScore = sum(scores)/popSize
+        
+        return scores, scoreIndexes, maxScore, minScore, meanScore
+    
+    
+    """
+    create offspring from randomly chosen subset of existing population
+    """
+    def getOffspring(self, popn, fltClns, childCount):
+        newPopn = []
+        newFltClns = []
+        
+        indexes = list(range(len(popn)))
+        rnd.shuffle(indexes)
+        
+        # create children, all hopefully better than the parents
+        for i in range(0, childCount):
+            parent = popn[indexes[i]]
+            parentfltCln = fltClns[indexes[i]]
+            
+            child, childFltCln, status = self.biasMutate(parent, parentfltCln)
+
+            newPopn.append(child)
+            newFltClns.append(childFltCln)
+            
+        return newPopn, newFltClns
+    
+    
+    def findDuplicates(self, popn):
+        keys = [",".join(x.seq()) for x in popn]
+        keyFreq = [keys.count(p) for p in keys]
+        
+        for i in range(len(keys)):
+            if keyFreq[i] > 1:
+                print("Duplicate entries for \n{}".format(popn[i]))
+    
+    
         
     """
     run simulation for new population of timetables
@@ -102,8 +159,8 @@ class GATimetable:
     def run(self, base_airport_iata, fleet_type_id, outbound_dep=None, 
             base_turnaround_delta=None, max_range=None, 
             add_mtx_gap=True, graveyard=True, ignore_existing=False,
-            popSize=50, maxGenerations=100, mutProb=0.25,
-            eliteProp=0.1):
+            popSize=100, maxGenerations=40, mutProb=0.05,
+            eliteProp=0.01):
         if (base_airport_iata not in self.flManager.flights
             or fleet_type_id not in self.flManager.flights[base_airport_iata]):
             raise Exception("__call__ args: base_airport_iata = {}; "
@@ -139,36 +196,29 @@ class GATimetable:
              
         popn, fltClns = populate()
         
+        
         # elite count
         eliteCnt = int(popSize * eliteProp)
-        
-        # proportion to use as parents
-        parentCnt = int(popSize * mutProb)
-        
-        # children per parent
-        # if there was rounding, low-scoring parents get one more child
-        childCnt = (popSize - eliteCnt) // parentCnt
+        childCount = int(popSize * mutProb)
         
         # run until various conditions hit
         gen = 0
         while True:
+#            for x in range(popSize):
+#                if popn[x].total_time() < timedelta(days=6):
+#                    print("bad news at [{}]\n{}\n{}".format(x, popn[x], fltClns[x].status()))
+ 
+            #self.findDuplicates(popn)
             gen = gen + 1
 
             if gen > maxGenerations:
                 break
             
-            # get scores
-            scores = [tt.getScore() for tt in popn]
-                      
-            # list indexes in sorted order
-            scoreIndexes = [b[0] for b in sorted(enumerate(scores),
-                            key=lambda i:i[1])]
-            
-            maxScore = scores[scoreIndexes[popSize-1]]
-            minScore = scores[scoreIndexes[0]]
-            meanScore = sum(scores)/popSize
+            (scores, scoreIndexes,
+             maxScore, minScore, meanScore) = self.getScores(popn)
 
-            print("{}:\t{}\t{}\t{}".format(gen, minScore, meanScore, maxScore))
+            print("{}:\t{}\t{}\t{}".format(gen, minScore, 
+                  meanScore, maxScore))
 
             # if winner found, build new population and start new sim
             if scores[scoreIndexes[0]] == 0:
@@ -181,26 +231,37 @@ class GATimetable:
                 continue
 
             newPopn = []
+            newFltClns = []
             
             # get elites
             newPopn.extend([popn[i] for i in scoreIndexes[0:eliteCnt]])
+            newFltClns.extend([fltClns[i] for i in scoreIndexes[0:eliteCnt]])
             
-            # create remaining children
-            for i in range(0, parentCnt):
-                parent = popn[scoreIndexes[i]]
-                fltCln = fltClns[scoreIndexes[i]]
+            # create offspring from total population
+            x, y = self.getOffspring(popn, fltClns, childCount)
+            newPopn.extend(x)
+            newFltClns.extend(y)
 
-                # highest scorers get an extra child each to complete set
-                if popSize != len(newPopn) + childCnt * (parentCnt - i):
-                    localCnt = childCnt + 1
-                else:
-                    localCnt = childCnt
-
-                newPopn.extend([self.biasMutate(parent, fltCln)[0] 
-                                for _ in range(localCnt)])
-            
+            for i in range(len(newPopn), popSize):
+                newFltClns.append(self.origFltCln.clone())
+                newPopn.append(Timetable(
+                           self.ttManager, 
+                           base_airport=base_airport, 
+                           fleet_type=fleet_type, 
+                           outbound_dep=outbound_dep, 
+                           base_turnaround_delta=base_turnaround_delta, 
+                           max_range=max_range, 
+                           graveyard=graveyard).randomise(newFltClns[i]))
+                self.tweak(newPopn[i], newFltClns[i])
+                
             # replace population
             popn = newPopn
+            fltClns = newFltClns
+            self.removeDuplicates(popn, fltClns)
+            
+        scores = [tt.getScore() for tt in popn]
+        for i in range(0, eliteCnt):
+            print(popn[i])
 
 
     """
@@ -215,17 +276,26 @@ class GATimetable:
     """
     adjust worst scoring entry
     """
-    def adjust(self, tt, score):
+    def adjust(self, tt, score=None):
         if not isinstance(tt, Timetable):
             raise Exception("Invalid Timetable [{}]".format(tt))
 
-        highestScoringIndex = self.highestScoringIndex(tt)
-
-        tt.flights[highestScoringIndex].adjust()
-        tt.recalc()
-        return tt.getScore() < score
-
+        worst = list(filter(lambda x: tt.flights[x].metaScore.get() != 0.0, 
+                            range(0, len(tt.flights))))
         
+        if len(worst) == 0:
+            return True
+
+        for wIndex in worst:
+            oldFlight = tt.flights[wIndex].clone()
+            tt.flights[wIndex].adjust()
+            tt.recalc()
+            
+            if tt.getScore() >= score:
+                tt.flights[wIndex] = oldFlight
+    
+        return tt.getScore() < score
+       
     """
     swap worst scoring flight for others in timetable, until score is improved 
     or all flights have been tried
@@ -233,30 +303,32 @@ class GATimetable:
     def swapInPlace(self, tt, score=None):
         if not isinstance(tt, Timetable):
             raise Exception("Invalid Timetable")
-
-        if score is not None:
-            highestScoringIndex = self.highestScoringIndex(tt)
-        else:
-            highestScoringIndex = rnd.choice(range(0, len(tt.flights)))
+        
+        worst = list(filter(lambda x: tt.flights[x].metaScore.get() != 0.0, 
+                            range(0, len(tt.flights))))
+        
+        if len(worst) == 0:
+            return True
+        
+        oldFlights = tt.flights[:]
 
         # find element with highest score and swap with everything else 
         # until we get a lower score
-        for testIndex in range(0, len(tt.flights)):
-            if testIndex == highestScoringIndex:
-                continue
-            temp = tt.flights[testIndex]
-            tt.flights[highestScoringIndex] = tt.flights[testIndex]
-            tt.flights[testIndex] = temp
-            tt.recalc()
+        for wIndex in worst:
+            for idx in range(0, len(tt.flights)):
+                if idx == wIndex:
+                    continue
+                temp = tt.flights[wIndex]
+                tt.flights[wIndex] = tt.flights[idx]
+                tt.flights[idx] = temp
+                tt.recalc()
+                
+                if tt.getScore() >= score:
+                    tt.flights = oldFlights[:]
+                else:
+                    oldFlights = tt.flights[:]
             
-            if score is None or tt.getScore() < score:
-                break
-            else: # swap them back
-                temp = tt.flights[highestScoringIndex]
-                tt.flights[testIndex] = tt.flights[highestScoringIndex]
-                tt.flights[highestScoringIndex] = temp
-            
-        return False
+        return tt.getScore() < score
 
     """
     swap out worst scoring flight for another, until score is improved or no
@@ -268,35 +340,39 @@ class GATimetable:
         if not isinstance(fltCln, FlightCollection):
             raise Exception("Invalid FlightCollection")
         
-        if score is not None:
-            highestScoringIndex = self.highestScoringIndex(tt)
-        else:
-            highestScoringIndex = rnd.choice(range(0, len(tt.flights)))
-
-        oldFlight = tt.flights[highestScoringIndex].flight
-        ofLength = oldFlight.length() + tt.remaining()
+        worst = list(filter(lambda x: tt.flights[x].metaScore.get() != 0.0, 
+                            range(0, len(tt.flights))))
 
         # find element with highest score and swap with something else 
         # from fltCln until we get a lower score
-        for newFlight in fltCln.ordered():
-            if newFlight.length() > ofLength:
-                newFlight = None
-                continue
-            #print("{} {}".format(newFlight.flight_number, newFlight.length()))
-            tt.flights[highestScoringIndex].flight = newFlight
-            tt.recalc()
-            
-            if score is None or tt.getScore() < score:
-                break
-            else:
-                newFlight = None
+        for wIndex in worst:
+            oldEntry = tt.flights[wIndex]
+            oldFlight = tt.flights[wIndex].flight
+            ofLength = oldFlight.length() + tt.remaining()
+
+            for newFlight in fltCln.ordered():
+                if tt.contains(newFlight):
+                    pass
+                if newFlight.length() > ofLength:
+                    newFlight = None
+                    break
+                #print("{} {}".format(newFlight.flight_number, newFlight.length()))
+                newEntry = TimetableEntry(newFlight, tt)
+                tt.flights[wIndex] = newEntry
+                tt.recalc()
+                
+                if score is None or tt.getScore() < score:
+                    fltCln.undelete(oldFlight)
+                    fltCln.delete(newFlight)
+                    return True
+                else:
+                    newFlight = None
         
-        if newFlight is None:
-            tt.flights[highestScoringIndex].flight = oldFlight
-            return False
-        else:
-            fltCln.delete(newFlight)
-            return True
+            tt.flights[wIndex] = oldEntry
+            tt.recalc()
+
+            
+        return False
     
     """
     reverse order of subsequence of flight events
@@ -313,40 +389,106 @@ class GATimetable:
                                                                  k=2))
             
             # reverse list segment between start and end
-            rev = reversed(tt.flights[startIndex:endIndex])
+            rev = list(reversed(tt.flights[startIndex:endIndex]))[:]
             
             # copy reversed segment back
-            tt.flights[startIndex:endIndex+1] = rev
+            tt.flights[startIndex:endIndex] = rev
             tt.recalc()
             if score is None or tt.getScore() < score:
                 return True
-        
-        tt.flights = oldFlights
-        tt.recalc()
+            else:
+                tt.flights = oldFlights
+                tt.recalc()
+
         return False
     
+    """
+    try changing start time 
+    """
+    def startTimes(self, tt, score=None, tryCount=20):
+        if not isinstance(tt, Timetable):
+            raise Exception("Invalid Timetable")
+        
+        origStartTime = tt.start_time
+        
+        for _ in range(tryCount):
+            tt.start_time = tt.base_airport.getRandomStartTime()
+            tt.recalc()
+            
+            if score is None or tt.getScore() < score:
+                return True
+            
+        tt.start_time = origStartTime
+        tt.recalc()
+        
+        return False
     
     """
     permute order of flights in timetable, up to permuteCount times, stop
     if score is improved
     """
-    def permute(self, tt, score=None, permuteCount=3):
+    def permute(self, tt, score=None, permuteCount=30):
         if not isinstance(tt, Timetable):
             raise Exception("Invalid Timetable")
 
-        oldFlights = tt.flights[:]
+        #oldFlights = tt.flights[:]
 
         # use all but the first (zeroth) entry
         for run in range(0, permuteCount):
-            rnd.shuffle(tt.flights)
+            #rnd.shuffle(tt.flights)
+            tt.flights = rnd.sample(tt.flights, k=len(tt.flights))
             tt.recalc()
 
             if score is None or tt.getScore() < score:
                 return True
         
-        tt.flights = oldFlights
+        #tt.flights = oldFlights
         tt.recalc()
         return False
+    
+    """
+    tweak a timetable, hopefully reducing score
+    """
+    def tweak(self, tt, fltCln):
+        if not isinstance(tt, Timetable):
+            raise Exception("tweak(): Invalid args [{}]".format(tt))
+            
+        if not isinstance(fltCln, FlightCollection):
+            raise Exception("Invalid FlightCollection")
+            
+        score = tt.getScore()
+            
+        # try changing stsrt time
+        #if self.startTimes(tt, score):
+        #    pass
+            #print("biasMutate: startTimes")
+            #return tt, fltCln, True
+ 
+        #
+        if self.adjust(tt, score):             
+            pass
+            #print("biasMutate: adjust")
+            #return tt, fltCln, True
+ 
+         #
+        if self.swapInPlace(tt, score):
+            pass
+            #print("biasMutate: swapInPlace {} -> {}".format(score, tt.getScore()))
+            #return tt, fltCln, True
+         
+        if self.swapOut(tt, fltCln, score):
+            pass
+            #print("biasMutate: swapOut")
+            #return tt, fltCln, True
+         
+        # aggressive penultimate resort
+        if self.invert(tt, score):
+            pass
+            #print("biasMutate: invert")
+            #return tt, fltCln, True
+            
+        return tt.getScore() < score
+
     
     """
     spawn lower-score mutated child of timetable, trying methods with following
@@ -362,38 +504,57 @@ class GATimetable:
     returns True if the Timetable has a reduced score
     returns False otherwise
     """
-    def biasMutate(self, parent, fltCln):
+    def biasMutate(self, parent, parentFltCln):
         if not isinstance(parent, Timetable):
             raise Exception("mutate(): Invalid args [{}]".format(parent))
             
-        if not isinstance(fltCln, FlightCollection):
+        if not isinstance(parentFltCln, FlightCollection):
             raise Exception("Invalid FlightCollection")
             
         score = parent.getScore()
         
-        #print("biasMutate {}\n{}".format(score, parent))
+        #print("biasMutate {}".format(score))
         
         tt = parent.clone()
-
-        # aggressive first resort
-        if self.permute(tt, score):
-            return tt, True
-
-        if self.adjust(tt, score):
-            return tt, True
+        fltCln = parentFltCln.clone()
         
-        if self.swapInPlace(tt, score):
-            return tt, True
-
-        if self.swapOut(tt, fltCln, score):
-            return tt, True
+        # aggressive
+        self.permute(tt, score)
         
-        # aggressive penultimate resort
-        if self.invert(tt, score):
-            return tt, True
+        self.tweak(tt, fltCln)
+       
+        if tt.getScore() >= score:
+            fltCln.reset()
+            tt.randomise(fltCln)
+            
+        #print("biasMutate: randomise {}/{}".format(score, tt.getScore()))
+        
+        #print ("scores: {}, {}".format(score, tt.getScore()))
+        return tt, fltCln, True
+    
+    """
+    finds duplicates and replaces them with randomised entries
+    """
+    def removeDuplicates(self, popn, fltClns):
+        hashMap = dict()
+        
+        # hash each entry and build list of dupicates
+        for index in range(0, len(popn)):
+            key = popn[index].hash()
+            if key not in hashMap:
+                hashMap[key] = []
+            hashMap[key].append(index)
+            
+        for key in hashMap:
+            if len(hashMap[key]) > 1:
+                print("removeDuplicates: {} x {}".format(key, len(hashMap[key])))
+                # save the first one, replace the rest
+                for i in range(1, len(hashMap[key])):
+                    cln = fltClns[hashMap[key][i]]
+                    cln.reset()
+                    popn[hashMap[key][i]].randomise(cln)
 
         
-        return tt, False
     
     """
     spawn mutated child of timetable, trying methods with following
@@ -405,14 +566,16 @@ class GATimetable:
         
     returns child
     """
-    def randMutate(self, parent, fltCln):
+    def randMutate(self, parent, parentFltCln):
         if not isinstance(parent, Timetable):
             raise Exception("randMutate(): Invalid args [{}]".format(parent))
             
-        if not isinstance(fltCln, FlightCollection):
+        if not isinstance(parentFltCln, FlightCollection):
             raise Exception("Invalid FlightCollection")
             
         tt = parent.clone()
+        fltCln = parentFltCln.clone()
+
         index = rnd.randrange(5)
         
         if index == 0:
@@ -426,5 +589,5 @@ class GATimetable:
         elif index == 4:
             self.permute(tt)
             
-        return tt, True
+        return tt, fltCln, True
         

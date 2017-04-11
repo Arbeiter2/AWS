@@ -246,9 +246,11 @@ class TimetableEntry:
             "{:<10}"     # outbound_arr
             "{:<10}"     # inbound_dep
             "{:<10}"     # inbound_arr
-            "{:<18}"     # total time
-            "{:<5}"      # available_day
-            "{:<10}\n"   # available time
+            "{:<10}"     # total time
+            "{:<2}"      # available_day
+            "{:<8}"   # available time
+            "{:<8}"
+            "\n"
             .format(
                 str(self.flight.flight_number),
                 self.flight.dest_airport.iata_code,
@@ -258,7 +260,8 @@ class TimetableEntry:
                 self.inbound_dep.strftime("%H:%M"),
                 self.inbound_arr.strftime("%H:%M"), 
                 str(self.total_time),
-                self.available_day, self.available_time.strftime("%H:%M")))
+                self.available_day, self.available_time.strftime("%H:%M"),
+                self.metaScore.get()))
 
     def to_dict(self):
         out = OrderedDict()
@@ -308,6 +311,8 @@ class FlightScore:
         self.errors['inbound_arr_graveyard'] = 0
         self.errors['inbound_arr_curfew'] = 0
 
+        self.errors['available_graveyard'] = 0
+
         self.errors['distance'] = 0
         self.errors['leg_curfews'] = 0
         self.errors['conflicts'] = 0
@@ -326,14 +331,15 @@ class FlightScore:
         # check airport curfews first
         parent = self.ttEntry.parent
         flight = self.ttEntry.flight
-        if parent.base_airport.in_curfew(self.ttEntry.outbound_dep):
-            self.errors['outbound_dep_curfew'] = 2
-        if flight.dest_airport.in_curfew(self.ttEntry.outbound_arr):
-            self.errors['outbound_arr_curfew'] = 2
-        if flight.dest_airport.in_curfew(self.ttEntry.inbound_dep):
-            self.errors['inbound_dep_curfew'] = 2
-        if parent.base_airport.in_curfew(self.ttEntry.inbound_arr):
-            self.errors['inbound_arr_curfew'] = 2
+        if not flight.isMaintenance:
+            if parent.base_airport.in_curfew(self.ttEntry.outbound_dep):
+                self.errors['outbound_dep_curfew'] = 2
+            if flight.dest_airport.in_curfew(self.ttEntry.outbound_arr):
+                self.errors['outbound_arr_curfew'] = 2
+            if flight.dest_airport.in_curfew(self.ttEntry.inbound_dep):
+                self.errors['inbound_dep_curfew'] += 2
+            if parent.base_airport.in_curfew(self.ttEntry.inbound_arr):
+                self.errors['inbound_arr_curfew'] += 2
 
         # check operation curfews next
         if not flight.isMaintenance and not parent.graveyard:
@@ -342,10 +348,17 @@ class FlightScore:
             if OpTimes.InArrCurfew(self.ttEntry.outbound_arr):
                 self.errors['outbound_arr_graveyard'] = 1
             if OpTimes.InDepCurfew(self.ttEntry.inbound_dep):
-                self.errors['inbound_dep_graveyard'] = 1
+                self.errors['inbound_dep_graveyard'] += 1
             if OpTimes.InArrCurfew(self.ttEntry.inbound_arr):
-                self.errors['inbound_arr_graveyard'] = 1
+                self.errors['inbound_arr_graveyard'] += 1
 
+        # check available_time
+        if not parent.graveyard:
+            if OpTimes.InDepCurfew(self.ttEntry.available_time):
+                self.errors['available_graveyard'] += 1
+            if parent.base_airport.in_curfew(self.ttEntry.available_time):
+                self.errors['available_graveyard'] += 2
+                
         # check individual legs for curfew violations
         if flight.hasStops:
             res = self.ttEntry.checkLegCurfews()
@@ -354,7 +367,8 @@ class FlightScore:
         # look for conflicts with other flights on the same route
         if (parent.ttManager
         and parent.ttManager.hasConflicts(self.ttEntry)):
-            self.errors['conflicts'] = 1
+            pass
+        #self.errors['conflicts'] = 1
             
     def curfewError(self):
         return (self.errors['outbound_dep_curfew'] != 0
@@ -363,7 +377,8 @@ class FlightScore:
              or self.errors['inbound_arr_curfew'] != 0)
 
     def get(self):
-        return math.sqrt(sum(map(lambda x: x * x, self.errors.values())))
+        #return math.sqrt(sum(map(lambda x: x * x, self.errors.values())))
+        return sum(map(lambda x: x, self.errors.values()))
 
 
 """
@@ -482,6 +497,7 @@ class Timetable:
                 self.ttManager.fMgr.MTXFlights[self.base_airport.iata_code]
                 [self.fleet_type.fleet_type_id]
                 )
+        fltCln.delete(mtx)
         self.appendFlight(mtx)
         self.recalc()
 
@@ -498,9 +514,13 @@ class Timetable:
 
         # permute order
         rnd.shuffle(self.flights)
-        self.recalc()
-        print(self)
-       
+        #self.recalc()
+        #print(self)
+        self.stretch(fltCln)
+        self.recalc()       
+        
+        if self.total_time() > timedelta(days=7):
+            print("Broken timetable\n{}".self)
         return self
 
 
@@ -642,9 +662,9 @@ class Timetable:
 
     """available time left in the week"""
     def remaining(self):
-        return (timedelta(days=7)
-                - self.total_time()
-                - self.base_turnaround_length)
+        return (timedelta(days=7) 
+              - self.total_time() )
+              #- self.fleet_type.ops_turnaround_length)
 
     def hasMaintenance(self):
         for entry in self.flights:
@@ -652,6 +672,9 @@ class Timetable:
                 return True
 
         return False
+    
+    def hash(self):
+        return hash(self.to_json())
 
     def recalc(self):
         self.aggTime = timedelta(0,0)
@@ -683,9 +706,53 @@ class Timetable:
 
     def getMetaData(self):
         return [f.metaScore.get() for f in self.flights]
-
+    
+    """
+    timetables with large gaps are bad, as are those longer than 7 days
+    """
+    def getDurationScore(self):
+        if self.total_time().total_seconds() > (7 * 86400):
+            return 1.0
+        elif self.remaining() >= self.fleet_type.ops_turnaround_length * 2.0:
+            return 1.0
+        else:
+            return 0.0
+        
+    """
+    try to find longer flight from collection which will improve utilisation
+    """
+    def stretch(self, fltCln):
+        if not isinstance(fltCln, FlightCollection):
+            raise Exception("Invalid FlightCollection")
+            
+        #print("before stretch: {}".format(self.remaining()))
+        
+        newFlight = None
+        while self.getDurationScore() > 0.0:
+            # find shortest instance that is not MTX
+            minFlightIdx = min(
+                    filter(lambda z: not self.flights[z].flight.isMaintenance, 
+                           range(0, len(self.flights))), 
+                    key=lambda x: self.flights[x].flight.length()
+                    )
+                
+            newLen = (self.flights[minFlightIdx].getLength() 
+                    + self.remaining()
+                    - self.fleet_type.ops_turnaround_length)
+            newFlight = fltCln.getShorterFlight(newLen)
+            if newFlight:
+                fltCln.undelete(self.flights[minFlightIdx].flight)
+                fltCln.delete(newFlight)
+                self.flights[minFlightIdx] = TimetableEntry(newFlight, self)
+                self.recalc()
+            else:
+                break
+        
+        #print("after stretch: {}".format(self.remaining()))
+        
+        
     def getScore(self):
-        return sum(self.getMetaData())
+        return sum(self.getMetaData()) + self.getDurationScore()
 
 
 

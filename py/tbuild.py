@@ -41,7 +41,7 @@ def usage():
       "\t\t[-u/--uri=] <URL-stub>\n"
 
     "\nMode\n"
-      "\t\t[-B/--build-mode=] [append | genetic ]\n"
+      "\t\t[-B/--build-mode=] [append | genetic]\n"
 
     "\nOptional\n"
       "\t\t[-s/--start-time] <HH:MM>\n"
