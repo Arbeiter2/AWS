@@ -34,6 +34,7 @@ def rest_controller(cls):
                 method = getattr(instance, action)
             except AttributeError:
                 raise exc.HTTPNotFound("No action %s" % action)
+
             resp = method()
             if isinstance(resp, str):
                 resp = Response(body=resp)

@@ -304,11 +304,11 @@ class GATimetable:
         if not isinstance(tt, Timetable):
             raise Exception("Invalid Timetable")
         
+        if score == 0.0:
+            return True
+
         worst = list(filter(lambda x: tt.flights[x].metaScore.get() != 0.0, 
                             range(0, len(tt.flights))))
-        
-        if len(worst) == 0:
-            return True
         
         oldFlights = tt.flights[:]
 
@@ -340,6 +340,9 @@ class GATimetable:
         if not isinstance(fltCln, FlightCollection):
             raise Exception("Invalid FlightCollection")
         
+        if score == 0.0:
+            return True
+
         worst = list(filter(lambda x: tt.flights[x].metaScore.get() != 0.0, 
                             range(0, len(tt.flights))))
 
@@ -381,6 +384,9 @@ class GATimetable:
         if not isinstance(tt, Timetable):
             raise Exception("Invalid Timetable")
             
+        if score == 0.0:
+            return True
+
         oldFlights = tt.flights[:]
 
         for run in range(0, invertCount):

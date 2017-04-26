@@ -1,9 +1,7 @@
 #!/usr/bin/python3
-
-from webob import Request, Response
+from webob import Response
 from controller import Controller, rest_controller
 import simplejson as json
-from decimal import Decimal
 
 def validateTime(hhmm):
     if hhmm is None:
@@ -19,8 +17,6 @@ class Airports(Controller):
     def get(self):
         """calls appropriate handler based on self.urlvars"""
         cursor = self.get_cursor()
-
-        out = []
         
         resp = Response()
         resp.content_type = 'application/json'
@@ -31,8 +27,7 @@ class Airports(Controller):
         # for getting arbitrary flights
         iata_code = self.urlvars.get('iata_code', None)
         icao_code = self.urlvars.get('icao_code', None)
-        curfew_finish = self.urlvars.get('curfew_finish', None)
-        curfew_start = self.urlvars.get('curfew_start', None)
+
         
         if (iata_code is not None):
             condition = "a.iata_code = {}".format(iata_code)
@@ -84,9 +79,9 @@ class Airports(Controller):
             # bad request
             return self.error(400)
             
-        if not validateTime(curfew_start) 
+        if (not validateTime(curfew_start) 
         or not validateTime(curfew_finish)
-        or curfew_start == curfew_finish:
+        or curfew_start == curfew_finish):
             # bad request
             return self.error(400)
             

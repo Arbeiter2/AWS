@@ -7,11 +7,9 @@ from nptools import (str_to_timedelta, str_to_nptime, TimeIsInWindow,
 import re
 from datasources import DataSource
 from collections import OrderedDict
-from functools import reduce
 import copy
 import random as rnd
 import json
-import math
 
 
 
@@ -365,9 +363,9 @@ class FlightScore:
             self.errors['leg_curfews'] = len(res) * 2
 
         # look for conflicts with other flights on the same route
-        if (parent.ttManager
-        and parent.ttManager.hasConflicts(self.ttEntry)):
-            pass
+        #if (parent.ttManager
+        #and parent.ttManager.hasConflicts(self.ttEntry)):
+        #    pass
         #self.errors['conflicts'] = 1
             
     def curfewError(self):
@@ -567,6 +565,35 @@ class Timetable:
 
         return True
 
+    """
+    """
+    def hasConflicts(self, ttEntry):
+        if not isinstance(ttEntry, TimetableEntry):
+            return False
+        
+        targets = list(filter(lambda x: 
+                x.flight.base_airport == ttEntry.flight.base_airport and
+                x.flight.dest_airport == ttEntry.flight.dest_airport,
+                self.flights))
+        
+        if len(targets) == 0:
+            return False
+        
+        for x in targets:
+            if x.flight == ttEntry.flight:
+                return True
+            
+            d = nptime_diff_sec(ttEntry.outbound_dep, x.outbound_dep)
+            #print("Timetable.hasConflicts: {}/{} {}/{}".format(x.flight.flight_number,
+            #      x.outbound_dep, ttEntry.flight.flight_number,
+            #      ttEntry.outbound_dep))
+            if d < 3600:
+                return True
+            
+        return False
+            
+
+    
     def __add__(self, f):
         out = copy.copy(self)
         out.flights = copy.copy(self.flights)
@@ -800,6 +827,13 @@ class TimetableManager:
         
 
     """
+    remove everything
+    """
+    def clear(self):
+        self.routes = {}
+        self.timetables = {}
+        
+    """
     loads flights and timetable data into a TimetableManager
     """
     def getTimetables(self):
@@ -818,8 +852,8 @@ class TimetableManager:
             fleet_type = self.fMgr.fleet_types[fleet_type_id]
 
             timetables[timetable_id] = Timetable(self,
-                timetable_id=timetable_id,
                 game_id=self.game_id,
+                timetable_id=timetable_id,
                 timetable_name=tt['timetable_name'],
                 base_airport=self.fMgr.airports[tt['base_airport_iata']],
                 fleet_type=fleet_type,
@@ -864,6 +898,10 @@ class TimetableManager:
             self.timetables[base_airport_iata][fleet_type_id].append(tt)
 
         # print(self.ttManager)
+        count = sum([sum(map(lambda y: len(self.timetables[x][y]), 
+                             self.timetables[x])) for x in self.timetables])
+        print("TimetableManager: Loaded {} timetables, {} routes".format(
+                count, len(self.routes)))
 
         return True
     
@@ -961,31 +999,25 @@ class TimetableManager:
                 ttEntry.flight.dest_airport.iata_code)
 
             # allow duplicates, but keep count of the references
-            if key in self.routes:
-                found = False
-                for k, x in self.routes[key].items():
-                    if x['flight'] == ttEntry.flight:
-                        x['refCount'] += 1
-                        found = True
-                        break # for x in self.routes[key]:
-                if found:
-                    continue # for ttEntry in entries
-            else:
-                # add new route pair key                
-                #self.routes[key] = []
+            if key not in self.routes:
                 self.routes[key] = {}
                 #print("TimetableManager.append adding {}".format(key))
 
             m = {}
             m['flight'] = ttEntry.flight
+            m['parent'] = ttEntry.parent
             m['outbound_dep'] = ttEntry.outbound_dep
             m['inbound_dep'] = ttEntry.inbound_dep
-            m['refCount'] = 1
-                       
+            
+            flight_number = m['flight'].flight_number
+            if flight_number not in self.routes[key]:
+                self.routes[key][flight_number] = []
 
             # add this flight to the route pair
             #self.routes[key].append(m)
-            self.routes[key][m['flight'].flight_number] = m
+            if not any(lambda x: x['parent'] == m['parent'] 
+                        for x in self.routes[key][flight_number]):
+                self.routes[key][flight_number].append(m)
             #print(key, self.routes[key])
             #print("TimetableManager.append {} {} ({})".format(key, m['flight'].flight_number,
             #      len(self.routes[key])))
@@ -1016,14 +1048,18 @@ class TimetableManager:
 
             #print("Removing {:<8} from flightmanager".
              #   format(ttEntry.flight.flight_number))
+            flight_number = ttEntry.flight.flight_number
                 
             # decrement the reference count, and delete entry if needed
-            for k,x in self.routes[key].items():
-                if x['flight'] == ttEntry.flight:
-                    x['refCount'] -= 1
-                    if x['refCount'] == 0:
-                        del self.routes[key][k]
-                    break # for x in self.routes[key]:
+            if flight_number not in self.routes[key]:
+                continue
+            
+            q = self.routes[key][flight_number]
+            
+            for x in range(0, len(q)):
+                if q[x]['flight'] == ttEntry.flight:
+                    del q[x]
+                break # for x in self.routes[key]:
 
 
     """
@@ -1033,32 +1069,55 @@ class TimetableManager:
     def filter(self, base_airport_iata, fleet_type_id):
         out = TimetableManager(source=self.source, ftManager=self.fMgr, 
                                build=False)
-        out.timetables = self.timetables
+        # bomb if filter pointless
+        if (base_airport_iata not in self.timetables 
+         or fleet_type_id not in self.timetables[base_airport_iata]):
+            return out
         
+        out.routes = self.routes.copy()
+        out.timetables = {}
+        out.timetables[base_airport_iata] = {}
+        out.timetables[base_airport_iata][fleet_type_id] = (
+                self.timetables[base_airport_iata][fleet_type_id][:]
+                )
+        
+        # find and delete all routes not containing base_airport_iata 
         pattern = re.compile(base_airport_iata)
-        for key in sorted(self.routes):
-            if pattern.search(key):
-                #print("route {}".format(key))
-                for k,f in self.routes[key].items():
-                    if f['flight'].fleet_type.fleet_type_id != fleet_type_id:
-                        if not key in out.routes:
-                            out.routes[key] = {}
-                        out.routes[key][k] = f
-            else:
-                pass
-                #print("No [{}] in [{}]".format(base_airport_iata, key))
-        #print("Filter complete")
+        deletions = list(filter(lambda m: not pattern.search(m),
+            out.routes.keys()))
+        for d in deletions:
+            del out.routes[d]
+
+        # find and delete flights without the right fleet_type
+        for key in sorted(out.routes):
+            for flight_number, f in out.routes[key].items():
+                deletions = sorted(list(filter(lambda q: 
+                    f[q]['flight'].fleet_type.fleet_type_id != fleet_type_id,
+                    range(0, len(f)))), reverse=True)
+                for d in deletions:
+                    del f[d]
+
         return out       
                 
         
         
     def __str__(self):
         out = ""
-        for key in self.routes:
-            out += "\n{} :: ".format(key)
+        for key in sorted(self.routes):
+            empty = True
+            
             l = ""
-            for f, x in self.routes[key].items():
-                l += "{} [{}], ".format(str(x['flight']), x['refCount'])
+            for flight_number, x in self.routes[key].items():
+                if len(x) == 0:
+                    continue
+                elif empty:
+                    out += "{} ::\n".format(key)
+                    empty = False
+                l += "#\t"
+                l += ", ".join(["{} {} {}".format(flight_number, 
+                                q['outbound_dep'],
+                                q['parent'].timetable_name) for q in x])
+                l += "\n"
             out += l
            
         return out
@@ -1069,7 +1128,6 @@ class TimetableManager:
     looks for conflicts between a timetable entry and all other entries
     """    
     def hasConflicts(self, ttEntry, ignore_base_timetables=False):
-        debug = False
         if not isinstance(ttEntry, TimetableEntry):
             raise Exception("Bad arg passed to TimetableManager.hasConflicts")
 
@@ -1077,74 +1135,72 @@ class TimetableManager:
         if ttEntry.flight.isMaintenance:
             return False        
 
-        # check timetables from this base if ignore_base_timetables not set
-        if not ignore_base_timetables:
+        # look for conflicts base -> destination
+        if self.conflict_inner(ttEntry, ignore_base_timetables, False):
+            return True
+            
+        # look for conflicts destination -> base
+        if self.conflict_inner(ttEntry, ignore_base_timetables, True):
+            return True
+
+        return False
+    
+    """
+    helper function for hasConflicts
+    """
+    def conflict_inner(self, ttEntry, ignore_base_timetables, reverse=False):
+        debug = False
+
+        if not reverse:
             key = "{}-{}".format(ttEntry.flight.base_airport.iata_code,
                 ttEntry.flight.dest_airport.iata_code)
+        else:
+            key = "{}-{}".format(ttEntry.flight.dest_airport.iata_code,
+                ttEntry.flight.base_airport.iata_code)
 
-            # no conflict for new routes
-            if not key in self.routes:
-                return False
-                
-            # refuse duplicates
-            #print("hasConflicts {}: {}".format(key, self.routes[key]))
-            for k, x in self.routes[key].items():
-                if x['flight'] == ttEntry.flight:
+        # no conflict for new routes
+        if not key in self.routes:
+            return False
+            
+        # refuse duplicates
+        #print("hasConflicts {}: {}".format(key, self.routes[key]))
+        for flight_number, entries in self.routes[key].items():
+            for x in entries:
+                if not ignore_base_timetables and x['flight'] == ttEntry.flight:
                     if debug:
                         print("!!conflict: already in use {}".format(
                             str(ttEntry.flight)))
                     return True
-                    
+                
+                #print("TimetableManager.hasConflict: [{}/{}] [{}/{}]".format(
+                #    ttEntry.parent.timetable_name, ttEntry.flight.flight_number,
+                #    x['parent'].timetable_name, flight_number))
+
+                # ignore entries with integer timetable_id values if needed 
+                if x['parent'].timetable_id and ignore_base_timetables:
+                    continue
+                   
                 # check for flights less than 60 minutes apart
                 d = nptime_diff_sec(ttEntry.outbound_dep, x['outbound_dep'])
-                if debug:
-                    print("C({}): {}-{} (OUT {}/{}) :: (OUT {}/{})".format(d,
-                        ttEntry.flight.base_airport.iata_code, 
-                        ttEntry.flight.dest_airport.iata_code, 
-                        ttEntry.flight.flight_number, ttEntry.outbound_dep, 
-                        x['flight'].flight_number, x['outbound_dep']))
                 if d < 3600:
+                    if debug:
+                        print("C({}): {}-{} (OUT {}/{}) :: (OUT {}/{})".format(d,
+                            ttEntry.flight.base_airport.iata_code, 
+                            ttEntry.flight.dest_airport.iata_code, 
+                            ttEntry.flight.flight_number, ttEntry.outbound_dep, 
+                            x['flight'].flight_number, x['outbound_dep']))
+                 
                     return True
-
+    
                 d = nptime_diff_sec(ttEntry.inbound_dep, x['inbound_dep'])
-                if debug:
-                    print("C({}): {}-{} (IN {}/{}) :: (IN {}/{})".format(d,                    
-                        ttEntry.flight.base_airport.iata_code, 
-                        ttEntry.flight.dest_airport.iata_code, 
-                        ttEntry.flight.flight_number, ttEntry.inbound_dep, 
-                        x['flight'].flight_number, x['inbound_dep']))
                 if d < 3600:
-                    return True
-                    
-        # look also for flights in the reverse direction
-        rkey = "{}-{}".format(ttEntry.flight.dest_airport.iata_code,
-            ttEntry.flight.base_airport.iata_code)
-
-        # will happen in 99% of cases
-        if not rkey in self.routes:
-            return False
-            
-        # refuse duplicates
-        for k,x in self.routes[rkey].items():
-            # check for flights less than 60 minutes apart
-            d = nptime_diff_sec(ttEntry.outbound_dep, x['inbound_dep'])
-            if debug:
-                print("C({}): {}-{} (OUT {}/{}) :: (IN {}/{})".format(d,              
-                    ttEntry.flight.base_airport.iata_code, 
-                    ttEntry.flight.dest_airport.iata_code, 
-                    ttEntry.flight.flight_number, ttEntry.outbound_dep, 
-                    x['flight'].flight_number, x['inbound_dep']))
-            if d < 3600:
-                return True
-
-            e = nptime_diff_sec(ttEntry.inbound_dep, x['outbound_dep'])
-            if debug:
-                print("C({}): {}-{} (IN {}/{}) :: (OUT {}/{})".format(e,
-                    ttEntry.flight.base_airport.iata_code, 
-                    ttEntry.flight.dest_airport.iata_code, 
-                    ttEntry.flight.flight_number, ttEntry.inbound_dep, 
-                    x['flight'].flight_number, x['outbound_dep']))
-            if e < 3600:
-                return True
+                    if debug:
+                        print("C({}): {}-{} (IN {}/{}) :: (IN {}/{})".format(d,                    
+                            ttEntry.flight.base_airport.iata_code, 
+                            ttEntry.flight.dest_airport.iata_code, 
+                            ttEntry.flight.flight_number, ttEntry.inbound_dep, 
+                            x['flight'].flight_number, x['inbound_dep']))
                 
+                    return True
+        
         return False

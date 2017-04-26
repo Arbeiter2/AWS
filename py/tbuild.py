@@ -178,7 +178,6 @@ if __name__ == '__main__':
     #    base_turnaround_delta, max_range, rebuild_all, writeToDatabase)
 
     flightMgr = FlightManager(source)
-    flightMgr.getFlights()
     timetableMgr = TimetableManager(source, flightMgr)
     
     if build_mode == "append":

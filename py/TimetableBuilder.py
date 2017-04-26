@@ -1,13 +1,12 @@
 #!/usr/bin/python3
 
 from flights import FlightManager
-from timetables import Timetable, TimetableEntry, OpTimes, TimetableManager
-import random, re
+from timetables import Timetable, TimetableEntry, TimetableManager
+import random as rnd
 from threading import Timer
 from datetime import timedelta
 from nptools import str_to_nptime
-from nptime import nptime
-import pdb
+import string
 
 
 class ThreadController:
@@ -97,7 +96,7 @@ class TimetableBuilder:
     """
     top-level function for building timetables
     """
-    def add_flight(self, tt, fltCln, ttManager):
+    def add_flight(self, tt, fltCln, ttManager, ignore_existing):
         if tt.is_good(self.threshold):
             return tt
 
@@ -110,9 +109,10 @@ class TimetableBuilder:
         t2 = None
         for f in fltCln:
             
-#            if re.search('317', f.flight_number):
-#                print('[@{}] '.format(f.flight_number), end='')
-
+            # bomb if this is a less than useful start time
+            if not fltCln.isValidTime(f, tt.available_time):
+                continue
+            
             # reject flights which would make timetable longer than 1 week
             if (tt.total_time() + f.length()).total_seconds() > 7 * 86400:
 #                print("tt.total_time = {}, "
@@ -134,6 +134,13 @@ class TimetableBuilder:
             # pdb.set_trace()
             entry = TimetableEntry(f, tt)
             entry.adjust()
+            
+            if tt.hasConflicts(entry):
+                continue
+            
+            if ttManager.hasConflicts(entry, ignore_existing):
+                #print("{} conflict".format(f))
+                continue
 
             # if we are on our last leg, relax graveyard requirement
             if not entry.is_good():
@@ -158,7 +165,7 @@ class TimetableBuilder:
 
             fltCln.delete(f)
             ttManager.append(entry)
-            t2 = self.add_flight(newTT, fltCln, ttManager)
+            t2 = self.add_flight(newTT, fltCln, ttManager, ignore_existing)
             #if re.search('317', f.flight_number):
             #    print('//[@{}]//| '.format(f.flight_number), end='')
                 #print(t2)
@@ -222,23 +229,34 @@ class TimetableBuilder:
         # create our filtered TimetableManager, excluding the flights from
         # this base/fleet type
         ttMgr = self.ttManager.filter(base_airport_iata, fleet_type_id)
+        if rebuild:
+            ttMgr.clear()
         
         # modify maintenance flight to include turnaround
         ttMgr.setMTXGapStatus(base_airport_iata, fleet_type_id, add_mtx_gap)
         base_airport = self.airports[base_airport_iata]
-
-
-        tt = Timetable(ttMgr, None, self.game_id, None,
-                       self.airports[base_airport_iata],
-                       self.fleet_types[fleet_type_id], start_time,
-                       base_turnaround_delta, max_range)
-        tt.graveyard = graveyard
 
         # not seen at this time vv
         retryCount = 0
         old_index = 0
         index = 1
         while True:
+            timetable_name = ''.join([rnd.choice(string.ascii_uppercase + 
+                                                 string.digits) 
+                                for n in range(12)])
+            print("TImetable name = {}".format(timetable_name))
+    
+            tt = Timetable(ttMgr, 
+                    game_id=self.game_id,
+                    timetable_id=None,
+                    timetable_name=timetable_name,
+                    base_airport=self.airports[base_airport_iata],
+                    fleet_type=self.fleet_types[fleet_type_id],
+                    outbound_dep=start_time,
+                    base_turnaround_delta=base_turnaround_delta,
+                    max_range=max_range)
+            tt.graveyard = graveyard
+
             print("Using start time {}".format(tt.available_time))
             TimeLimit = 10.0  * index
 
@@ -264,7 +282,7 @@ class TimetableBuilder:
             print("Before: {} entries; {}".format(len(fltCln),
                                                   fltCln.total_time()))
             self.rejected = []
-            newTimetable = self.add_flight(tt, fltCln, ttMgr)
+            newTimetable = self.add_flight(tt, fltCln, ttMgr, rebuild)
 
             ThreadController.stop()
 
@@ -273,6 +291,7 @@ class TimetableBuilder:
                 print("\nAfter: {} entries; {}\n".format(len(fltCln),
                                                        fltCln.total_time()))
                 all_timetables.append(newTimetable)
+                ttMgr.append(newTimetable)
                 #print(newTimetable)
                 #print(fltCln.status())
 
@@ -282,9 +301,7 @@ class TimetableBuilder:
                     break
                 else:
                     # tt.available_time += timedelta(minutes=5)
-                    tt.available_time = base_airport.getRandomStartTime()
-                    
-                    tt.start_time = tt.available_time
+                    start_time = base_airport.getRandomStartTime()
                      # print(str(x))
             else:
                 if not self.shuffle_flights:
@@ -316,7 +333,7 @@ class TimetableBuilder:
 
 
                 # print("Removing all timetables and starting again\n")
-                tt.available_time = base_airport.getRandomStartTime()
+                #tt.available_time = base_airport.getRandomStartTime()
                 tt.start_time = tt.available_time
 
                 if (index >= 2):
@@ -329,6 +346,8 @@ class TimetableBuilder:
             count = 0
                     
         out = []
+        print(ttMgr)
+
         for a in all_timetables:
             # increment name            
             if a.timetable_name is None:

@@ -1,6 +1,4 @@
-from webob import Request, Response
 from router import Router
-from controller import rest_controller
 import aws_games
 import aws_airports
 import aws_timetables
@@ -96,9 +94,15 @@ def application(environ, start_response):
     '/games/@game_id:\d+@/timetables/@base_airport_iata:[A-Z]{3}@',
     # GET
     '/games/@game_id:\d+@/timetables/@base_airport_iata:[A-Z]{3}@/@fleet_type_id:\d+@',
+    
     # GET
-    '/games/@game_id:\d+@/timetables/search/flights/@flight_number:([A-Z]{2}|[A-Z]\d|\d[A-Z])\d+([;,]([A-Z]{2}|[A-Z]\d|\d[A-Z])\d+)*@', # GET
-   
+    '/games/@game_id:\d+@/timetables/search/flights/@flight_number:'
+    '([A-Z]{2}|[A-Z]\d|\d[A-Z])\d+([;,]([A-Z]{2}|[A-Z]\d|\d[A-Z])\d+)*@', # GET
+     
+    # GET
+    '/games/@game_id:\d+@/timetables/conflicts/@base_airport_iata:[A-Z]{3}@',
+    # GET
+    '/games/@game_id:\d+@/timetables/conflicts/@timetable_id:\d+(;\d+)*@',
     ],
     controller=aws_timetables.TimetableController)
 

@@ -82,6 +82,19 @@ class Airport:
             
         return TimeIsInWindow(val, self.curfew_start, self.curfew_finish)
 
+    """
+    find earliest and latest possible departure/arrival times for airport
+    """
+    def getOpWindow(self):
+      # define min/max departure times
+        min_base_start = max(OpTimes.EarliestArr, OpTimes.EarliestDep)
+        max_base_start = min(OpTimes.LatestArr, OpTimes.LatestDep)
+        if self.curfew_start is not None:
+            min_base_start = max(min_base_start, self.curfew_finish)
+            max_base_start = min(max_base_start, self.curfew_start)        
+            
+        return min_base_start, max_base_start
+
     def getRandomStartTime(self):
         retVal = None
         rnd.seed()
@@ -334,6 +347,9 @@ class FlightManager:
                 )
                 flightCln = self.flights[base_airport_iata][fleet_type_id]
                 flightCln.append(mtx)
+                
+        print("FlightManager: loaded {} flights in {} bases".format(
+                len(self.flight_lookup), len(self.flights)))
 
         return True
 
@@ -375,19 +391,93 @@ container for subset of flights from FlightManager
 """
 class FlightCollection:
     def __init__(self, base_airport, shuffle =True):
-        self.base_airport = base_airport        
+        self.base_airport = base_airport      
         self.shuffle = shuffle
-
+        
+        self.min_start, self.max_start = self.base_airport.getOpWindow()
+        
         self.lexIndex = []
         self.durationIndex = []
         self.MTXEntry = None
         self.flights = dict()
         self.deleted = dict()
+        self.departureRanges = dict()
         
+    """
+    find ranges of acceptable departure times
+    
+    easiest to iterate through all allowed start times
+    """
+    def getDepartureRanges(self, f):
+        if not isinstance(f, Flight):
+            raise Exception("getDepartureRanges: bad flight {}".format(f))
+            
+        if f.isMaintenance:
+            # find earliest/latest possible starts based on effective
+            # available time of aircraft after MTX
+            e = self.max_start + (-f.length()) + (-f.fleet_type.min_turnaround)
+            s = self.min_start + (-f.length()) + (-f.fleet_type.min_turnaround)
+            return [{'start' : s, 'end' : e}]
+            
+        
+        out = []
+        increment = timedelta(minutes=5)
+        tzDiffOut = timedelta(seconds=int(f.delta_tz * 3600))
+        tzDiffIn = timedelta(seconds=-int(f.delta_tz * 3600))
+        
+        dest_min_time, dest_max_time = f.dest_airport.getOpWindow()
+        
+        t = self.min_start
+        inRange = None
+        while t != self.max_start:
+            outbound_arr = t + f.outbound_length + tzDiffOut
+            inbound_dep = outbound_arr + f.turnaround_length
+            inbound_arr = inbound_dep + f.inbound_length + tzDiffIn
+            
+            if (TimeIsInWindow(outbound_arr, dest_min_time, dest_max_time)
+            and TimeIsInWindow(inbound_dep, dest_min_time, dest_max_time)
+            and TimeIsInWindow(inbound_arr, self.min_start, self.max_start)):
+                if not inRange:
+                    inRange = dict()
+                    inRange['start'] = t
+                    out.append(inRange)
+                inRange['end'] = t
+            else:
+                inRange = None
+            
+            t = t + increment
+        
+        return out
+    
+    """
+    verify whether supplied departure time is within acceptable range
+    """
+    def isValidTime(self, f, t):
+        if not isinstance(t, nptime):
+            return False
+        
+        if isinstance(f, Flight):
+            flt = f.flight_number
+        elif isinstance(f, str):
+            flt = f
+        else:
+            return False
+        
+        if flt not in self.departureRanges:
+            return False
+        
+        for r in self.departureRanges[flt]:
+            if TimeIsInWindow(t, r['start'], r['end']):
+                return True
+            
+        return False
+
+
     def clone(self):
         out = FlightCollection(self.base_airport, self.shuffle)
         out.flights = self.flights.copy()
         out.deleted = self.deleted.copy()
+        out.departureRanges = self.departureRanges.copy()
 
         out.MTXEntry = self.MTXEntry
         out.buildDurationIndex()
@@ -403,11 +493,12 @@ class FlightCollection:
             self.MTXEntry = f
 
         self.flights[f.flight_number] = { 
-                                          'flight' : f, 
-                                          'deleted' : False,
-                                          'length' : f.length()
+                              'flight' : f, 
+                              'deleted' : False,
+                              'length' : f.length()
                                         }
         self.deleted[f.flight_number] = False
+        self.departureRanges[f.flight_number] = self.getDepartureRanges(f)
         
     
     """

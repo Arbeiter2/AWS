@@ -1,8 +1,6 @@
-from webob import Request, Response
-from controller import Controller, rest_controller, sortDictList
+from controller import Controller, rest_controller
 import simplejson as json
 import re
-from decimal import Decimal
 from datetime import datetime
 from collections import OrderedDict
 
@@ -128,24 +126,23 @@ class Games(Controller):
             'icao_code_href', 'city', 'airport_name',  'timezone' ]
 
         query = '''
-        SELECT DISTINCT g.game_id, g.name, MAX(r.date_added) AS date_added,
-        r.{}_airport_iata as iata_code, a.icao_code, a.timezone, a.city, 
-        a.airport_name,
-        TIME_FORMAT(c.start, '%H:%i') AS curfew_start,
-        TIME_FORMAT(c.finish, '%H:%i') AS curfew_finish
-        FROM games g, routes r, flights f,
-        airports a LEFT JOIN airport_curfews c
-        ON a.icao_code = c.icao_code
-        WHERE r.game_id = f.game_id
-        AND r.route_id = f.route_id
-        AND r.game_id = g.game_id
-        AND r.{}_airport_iata = a.iata_code
-        AND f.deleted = 'N'
-        AND g.deleted = 'N'
-        {}
-        GROUP BY 1, 2, 4
-        ORDER BY name, city
-        '''.format(mode, mode, condition)
+		SELECT qw.game_id, qw.name, qw.iata_code, 
+		a.icao_code, a.timezone, a.city, a.airport_name,
+		TIME_FORMAT(c.start, '%H:%i') AS curfew_start,
+		TIME_FORMAT(c.finish, '%H:%i') AS curfew_finish
+		FROM airports a LEFT JOIN airport_curfews c
+		ON a.icao_code = c.icao_code,
+		(SELECT DISTINCT g.game_id, g.name, r.{}_airport_iata as iata_code
+		FROM games g, routes r, flights f
+		WHERE g.deleted = 'N'
+		AND f.deleted = 'N'
+		AND r.game_id = f.game_id
+		AND r.route_id = f.route_id
+		AND r.game_id = g.game_id
+        {}) qw
+		WHERE qw.iata_code = a.iata_code
+		ORDER BY name, city
+        '''.format(mode, condition)
         cursor.execute(query)
         rows = cursor.fetchall()
 
@@ -169,9 +166,9 @@ class Games(Controller):
                 airport['curfew_start'] = r['curfew_start']
                 airport['curfew_finish'] = r['curfew_finish']
                 
-            if r['date_added'] is not None and r['date_added'] > last_modified:
-                last_modified = r['date_added']
-            del r['date_added']
+            #if r['date_added'] is not None and r['date_added'] > last_modified:
+            #    last_modified = r['date_added']
+            #del r['date_added']
                 
             games[r['game_id']][label].append(airport)
             seen.append(r['iata_code'])
@@ -215,9 +212,11 @@ class Games(Controller):
                     #print(airport)
                         
                     games[r['game_id']][label].append(airport)
+        #print(games)
  
-        out = sortDictList("name", games.values())
-                    
+        #out = sortDictList("name", games.values())
+        out = sorted(games.values(), key=lambda x: x['name'])
+                   
         #self.resp.text = json.dumps(out, encoding="ISO-8859-1")
         self.html_template = [{ "table_name" : "airports",
             "entity" : "game",
@@ -228,8 +227,8 @@ class Games(Controller):
             "stacked_headers" : True }]
             
         self.resp_data = { "airports" : out }
-        print(last_modified)
-        self.resp.last_modified = last_modified.timestamp()
+        #print(last_modified)
+        #self.resp.last_modified = last_modified.timestamp()
             
         return self.send()
 
@@ -311,33 +310,29 @@ class Games(Controller):
         data = json.loads(self.request.body)
         
         #if (not self.request.params['game_id'] or int(self.request.params['game_id']) <= 0 or not 'name' in self.request.params):
-        if (int(data.get('game_id', '0')) <= 0 or data.get('name', '') == ''):
-            return self.error(400)
-        else:
-            query = '''
-                INSERT IGNORE INTO games (game_id, name) 
-                VALUES ('{}', '{}')
-                ON DUPLICATE KEY UPDATE 
-                name=VALUES(name),
-                deleted='N'
-                '''.format(
-                data['game_id'], 
-                data['name'])
+        if (int(data.get('game_id', '0')) <= 0 or not data.get('name', None)
+           or not data.get('iata_code', None)):
+            return self.error(400, "JSON requires game_id, name, iata_code")
 
-            cursor = self.get_cursor()
+        query = '''
+            INSERT IGNORE INTO games (game_id, name, iata_code) 
+            VALUES ('{}', '{}', '{}')
+            ON DUPLICATE KEY UPDATE 
+            name=VALUES(name),
+            iata_code=VALUES(iata_code),
+            deleted='N'
+            '''.format(
+            data['game_id'], data['name'], data['iata_code'])
             
-            try:
-                cursor.execute(query)
-                obj = { 'game_id': data['game_id'], 
-                        'name': data['name'], 
-                        'deleted': 'N' 
-                      }
-                
-            except aws_db.Error as err:
-                return self.error(500, err)
-                
+        try:
+            cursor = self.get_cursor()
+            cursor.execute(query)
+        except Exception as e:
+            print(400, e)
+            
+        self.db.commit()
 
-        self.resp_data = obj
+        self.resp_data = data
         
         return self.send()
 

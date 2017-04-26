@@ -27,7 +27,7 @@ main.add_route([
                 '/flights/{game_id:\d+}/{bases}',
                 '/bases/{game_id:\d+}'
                ],
-               controller=aws_bases.BaseController)
+               controller=aws_games.BaseController)
 
 #req1 = Request.blank('/games')
 #resp1 = req1.get_response(main)
