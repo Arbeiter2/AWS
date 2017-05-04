@@ -2,13 +2,10 @@ from aws_db import AirwaysimDB
 
 db = AirwaysimDB()
 cursor = db.getCursor()
-#query = """SELECT DISTINCT SUBSTRING(flight_number, 3) AS flight_number
-#FROM flights
-#WHERE game_id = 190
-#AND deleted = 'N'"""
+
 query = """SELECT DISTINCT number
 FROM flights
-WHERE game_id = 190
+WHERE game_id = 206
 AND deleted = 'N'"""
 cursor.execute(query)
 

@@ -51,7 +51,10 @@ class DataSource:
         
         try:
             for tt in jsonList:
-                if not isinstance(tt, dict()):
+                if isinstance(tt, str):
+                    tt = json.loads(tt)
+
+                if not isinstance(tt, dict):
                     raise Exception("not a dict {}".format(str(tt)))
                     
                 # verify all required fields
@@ -59,14 +62,14 @@ class DataSource:
                     raise Exception("missing mandatory fields: "
                                     "{}".format(str(tt)))
     
-                if not isinstance(tt.entries, list):
+                if not isinstance(tt['entries'], list):
                     raise Exception("bad entries: {}".format(str(tt.entries)))
     
-                for e in tt.entries:
+                for e in tt['entries']:
                     if not all (x in e for x in entryFields):                
                         raise Exception("bad entry: {}".format(str(e)))
         except Exception as exc:
-            print("writeTimetable: ", exc)
+            print("validateTimetable: ", exc)
             return False
         
         return True
@@ -325,11 +328,12 @@ class DBDataSource(DataSource):
     def writeTimetables(self, jsonList):
 
         if not DataSource.validateTimetable(jsonList):
+            print("fail")
             return False
 
         if isinstance(jsonList, str):
             jsonList = json.loads(jsonList)
-            
+
         if not isinstance(jsonList, list):
             jsonList = [jsonList]
             
@@ -337,27 +341,27 @@ class DBDataSource(DataSource):
             query = '''
             INSERT INTO timetables (game_id, base_airport_iata, 
             fleet_type_id, timetable_name, base_turnaround_delta, 
-            last_modified)
-            VALUES ({}, '{}', {}, '{}', '{}', '{}', NOW())
-            '''.format(tt.game_id, tt.base_airport_iata, tt.fleet_type_id,
-                       tt.timetable_name,
-                       tt.base_turnaround_delta)
+            entries_json, last_modified)
+            VALUES ({}, '{}', {}, '{}', '{}', '', NOW())
+            '''.format(tt['game_id'], tt['base_airport_iata'], 
+                    tt['fleet_type_id'], tt['timetable_name'],
+                    tt['base_turnaround_delta'])
     
             # print(query)
             self.cursor.execute(query)
     
-            tt.timetable_id = self.cursor.lastrowid
+            tt['timetable_id'] = self.cursor.lastrowid
     
             # timetable_entries rows
             entries = []
     
-            for x in tt.entries:
+            for x in tt['entries']:
                 txt = "({}, '{}', '{}', '{}', '{}', '{}', '{}')".format(
-                    tt.timetable_id, x.flight_number,
-                    x.dest_airport_iata,
-                    x.outbound_dep,
-                    x.start_day, x.available_time,
-                    x.post_padding)
+                    tt['timetable_id'], x['flight_number'],
+                    x['dest_airport_iata'],
+                    x['outbound_dep'],
+                    x['start_day'], x['available_time'],
+                    x['post_padding'])
                 
                 entries.append(txt)
     
@@ -371,12 +375,11 @@ class DBDataSource(DataSource):
             # print(query)
     
             self.cursor.execute(query)
-    
-            if self.cnx.in_transaction:
-                self.cnx.commit()
-            self.cursor.close()
-            self.cnx.close()
-            
-            return True
+
+        self.cnx.commit()
+        self.cursor.close()
+        self.cnx.close()            
+
+        return True
 
     

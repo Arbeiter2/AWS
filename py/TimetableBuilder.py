@@ -355,10 +355,15 @@ class TimetableBuilder:
                                                     a.fleet_type.fleet_icao_code,
                                                     count + 1)
                 count = count + 1
-            out.append(a.to_json())
+            out.append(a.to_dict())
             print(str(a))
-            if writeToDB:
-                self.writeTimetableToDB(a)
+
+        #print(fltCln.status())
+        
+        # write to database
+        if writeToDB:
+            #print(out)
+            self.flManager.source.writeTimetables(out)
         # ttManager.remove(tt)
 
         # write JSON to file
@@ -371,7 +376,6 @@ class TimetableBuilder:
             f.write("[" + ",\n".join(out) + "]")
             f.close()
 
-        print(fltCln.status())
         # fltCln.reset()
         # print(fltCln.status())
 

@@ -268,6 +268,7 @@ class TimetableEntry:
         out['dest_airport_iata'] = self.flight.dest_airport.iata_code
         out['start_day'] = self.start_day
         out['start_time'] = time_to_str(self.outbound_dep)
+        out['outbound_dep'] = time_to_str(self.outbound_dep)
         out['outbound_arr'] = time_to_str(self.outbound_arr)
         if (self.dest_turnaround_padding >
             self.parent.fleet_type.ops_turnaround_length):
@@ -280,6 +281,7 @@ class TimetableEntry:
         out['inbound_dep'] = time_to_str(self.inbound_dep)
         out['inbound_arr'] = time_to_str(self.inbound_arr)
         out['earliest_available'] = time_to_str(self.available_time)
+        out['available_time'] = time_to_str(self.available_time)
         out['post_padding'] = time_to_str(self.post_padding)
 
         return out
