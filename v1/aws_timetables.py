@@ -60,6 +60,7 @@ class Timetables(Controller):
         
         # for getting arbitrary flights
         base_airport_iata = self.urlvars.get('base_airport_iata', None)
+        dest_airport_iata = self.urlvars.get('dest_airport_iata', None)
         timetable_id = self.urlvars.get('timetable_id', None)
         fleet_type_id = self.urlvars.get('fleet_type_id', None)
         flight_number = self.urlvars.get('flight_number', None)
@@ -87,8 +88,9 @@ class Timetables(Controller):
         elif (timetable_id or all_data):
             return self.getTimetables(game_id, base_airport_iata, 
                 fleet_type_id, timetable_id, all_data)
-        elif flight_number is not None:
-            return self.searchTimetables(game_id, flight_number)
+        elif flight_number or dest_airport_iata:
+            return self.searchTimetables(game_id, flight_number,
+                                         dest_airport_iata)
         else:
             return self.getTimetableHeaders(game_id, base_airport_iata,
              fleet_type_id)
@@ -105,22 +107,29 @@ class Timetables(Controller):
             self.fleet_type_map[row['fleet_type_id']] = row
             
     '''return a list of timetables containing the specified flight_number'''
-    def searchTimetables(self, game_id, flight_number):
-        if game_id is None or flight_number is None:
+    def searchTimetables(self, game_id, flight_number, dest_airport_iata):
+        if game_id is None or (not flight_number and not dest_airport_iata):
             return self.error(500)
             
-        fltNum = list(set(re.split("[;,]", flight_number)))
+        param = None
+        if dest_airport_iata:
+            param = 'dest_airport_iata'
+            elems = list(set(re.split("[;,]", dest_airport_iata)))
+        else:
+            param = 'flight_number'
+            elems = list(set(re.split("[;,]", flight_number)))
         query = '''
         SELECT DISTINCT t.game_id, te.timetable_id, te.dest_airport_iata,
         t.base_airport_iata, t.timetable_name, t.fleet_type_id, 
-        ft.icao_code AS fleet_type, te.flight_number
+        ft.icao_code AS fleet_type, te.flight_number, te.start_time,
+        te.start_day
         FROM timetable_entries te, timetables t, fleet_types ft
         WHERE t.game_id = {}
         AND t.timetable_id = te.timetable_id
-        AND te.flight_number IN ('{}')
+        AND te.{} IN ('{}')
         AND ft.fleet_type_id = t.fleet_type_id
         AND t.deleted = 'N'
-        '''.format(game_id, "', '".join(fltNum))
+        '''.format(game_id, param, "', '".join(elems))
         #print(query)
         
         cursor = self.get_cursor()
@@ -133,10 +142,15 @@ class Timetables(Controller):
             'fleet_type', 'fleet_type_href',
             'flight_number', 'flight_number_href',
             "base_airport_iata", "base_airport_iata_href",
-            "dest_airport_iata", "dest_airport_iata_href"]
+            "dest_airport_iata", "dest_airport_iata_href",
+            "start_time", "start_day"]
         
         output = []
         for row in cursor:
+            bits = str(row['start_time']).split(':')[:2]
+            if len(bits[0]) == 1:
+                bits[0] = "0" + bits[0]
+            row['start_time'] = ":".join(bits)
             row['fleet_type_href'] = "{}/fleets/{}.{}".format(
                 self.request.application_url, row['fleet_type_id'], 
                 self.content_type)
@@ -163,7 +177,8 @@ class Timetables(Controller):
         "entity" : "timetable",
             "fields" : ["game_id", "timetable_id", "timetable_name", 
             'fleet_type', "flight_number",
-            "base_airport_iata", 'dest_airport_iata'
+            "base_airport_iata", 'dest_airport_iata', "start_day", 
+            "start_time"
              ] }]
 
         self.resp_data = { "timetable flight search" : output }

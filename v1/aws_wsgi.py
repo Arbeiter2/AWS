@@ -98,6 +98,9 @@ def application(environ, start_response):
     # GET
     '/games/@game_id:\d+@/timetables/search/flights/@flight_number:'
     '([A-Z]{2}|[A-Z]\d|\d[A-Z])\d+([;,]([A-Z]{2}|[A-Z]\d|\d[A-Z])\d+)*@', # GET
+
+    '/games/@game_id:\d+@/timetables/search/airports'
+    '/@dest_airport_iata:([A-Z]{3}([,;][A-Z]{3})*)@', # GET
      
     # GET
     '/games/@game_id:\d+@/timetables/conflicts/@base_airport_iata:[A-Z]{3}@',

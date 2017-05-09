@@ -22,6 +22,8 @@ main.add_route([
     '/games/@game_id:\d+@/timetables', # GET, POST
     '/games/@game_id:\d+@/timetables/search/flights'
     '/@flight_number:([A-Z]{2}|[A-Z]\d|\d[A-Z])\d+([;,]([A-Z]{2}|[A-Z]\d|\d[A-Z])\d+)*@', # GET
+    '/games/@game_id:\d+@/timetables/search/airports'
+    '/@dest_airport_iata:([A-Z]{3}([,;][A-Z]{3})*)@', # GET
     '/games/@game_id:\d+@/timetables/conflicts/@base_airport_iata:[A-Z]{3}@', # GET
     '/games/@game_id:\d+@/timetables/conflicts/@timetable_id:\d+(;\d+)*@', # GET
     '/games/@game_id:\d+@/timetables/@mode:(all|flights)@', # GET
@@ -35,7 +37,7 @@ main.add_route([
 
                
    
-req1 = Request.blank("/games/230/timetables/conflicts/PHX")
+req1 = Request.blank("/games/206/timetables/search/airports/DOH")
 #req1.accept = "application/json; q=0.5, text/html;q=1"
 #req1.accept = "text/html;q=1"
 req1.method = 'GET'
