@@ -113,22 +113,34 @@ class Timetables(Controller):
             
         param = None
         if dest_airport_iata:
-            param = 'dest_airport_iata'
+            param = 'te.dest_airport_iata'
             elems = list(set(re.split("[;,]", dest_airport_iata)))
         else:
-            param = 'flight_number'
-            elems = list(set(re.split("[;,]", flight_number)))
+            #param = 'flight_number'
+            #elems = list(set(re.split("[;,]", flight_number)))
+            
+            # we only use 2-char IATA airline code
+            param = 'CAST(f.number AS CHAR)'
+            elems = list(set(map(lambda x: str(int(x[2:])), 
+                                 re.split("[;,]", flight_number))))
         query = '''
         SELECT DISTINCT t.game_id, te.timetable_id, te.dest_airport_iata,
         t.base_airport_iata, t.timetable_name, t.fleet_type_id, 
         ft.icao_code AS fleet_type, te.flight_number, te.start_time,
         te.start_day
-        FROM timetable_entries te, timetables t, fleet_types ft
+        FROM timetable_entries te, timetables t, fleet_types ft, 
+        flights f, routes r
         WHERE t.game_id = {}
+        AND f.game_id = t.game_id
+        AND f.route_id = r.route_id
+        AND r.dest_airport_iata = te.dest_airport_iata
         AND t.timetable_id = te.timetable_id
-        AND te.{} IN ('{}')
+        AND f.number = CAST(SUBSTR(te.flight_number, 3) AS DECIMAL)
+        AND {} IN ('{}')
         AND ft.fleet_type_id = t.fleet_type_id
+        AND f.fleet_type_id = t.fleet_type_id
         AND t.deleted = 'N'
+        AND f.deleted = 'N'
         '''.format(game_id, param, "', '".join(elems))
         #print(query)
         
@@ -439,7 +451,7 @@ class Timetables(Controller):
         self.getFleetTypes()
 
         query = """
-        SELECT MAX(t.last_modified) AS last_modified, f.number, 
+        SELECT DISTINCT t.last_modified, f.number, 
         te.flight_number, t.base_airport_iata, t.fleet_type_id, 
         te.dest_airport_iata, te.timetable_id
         FROM timetables t, timetable_entries te, flights f
@@ -450,7 +462,6 @@ class Timetables(Controller):
         AND t.deleted = 'N'
         AND f.deleted = 'N'
         AND te.flight_number <> 'MTX'
-        GROUP BY f.flight_number
         ORDER BY number""".format(game_id)
         cursor.execute(query)
         
@@ -805,6 +816,7 @@ class Timetables(Controller):
         
         
         output = {}
+        print(multiples['KWI']['BER'])
         
         # threshold below which flights are considered in conflict
         # for busy routes this can be as low as 30 minutes, but has a default

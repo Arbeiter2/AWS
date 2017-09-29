@@ -8,7 +8,7 @@ cursor = db.getCursor()
 #AND deleted = 'N'"""
 query = """SELECT DISTINCT number
 FROM flights
-WHERE game_id = 213
+WHERE game_id = 206
 AND deleted = 'N'"""
 cursor.execute(query)
 

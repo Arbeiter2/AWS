@@ -36,8 +36,9 @@ main.add_route([
     controller=aws_timetables.TimetableController)
 
                
-   
-req1 = Request.blank("/games/206/timetables/search/airports/DOH")
+#req1 = Request.blank("/games/206/timetables/conflicts/KWI")
+
+req1 = Request.blank("/games/206/timetables/search/flights/ZZ0049")
 #req1.accept = "application/json; q=0.5, text/html;q=1"
 #req1.accept = "text/html;q=1"
 req1.method = 'GET'

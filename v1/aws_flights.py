@@ -31,8 +31,9 @@ def validateDelta(hhmm):
     return (re.match(r"^\d+$", fields[0]) and '00' <= fields[1] < '60')
 
 num = re.compile(r"^\d+$")
-flNum = re.compile(r"^([A-Z]{2}|[A-Z]\d|\d[A-Z])0*(\d+)$")
+flNum = re.compile(r"^([A-Z]{2,3}|[A-Z]\d|\d[A-Z])0*(\d+)$")
 iata = re.compile(r"^[A-Z]{3}$")
+icao = re.compile(r"^[A-Z]{4}$")
 
 
 class Flights(Controller):
@@ -55,10 +56,14 @@ class Flights(Controller):
 
         # for getting data from a specific base
         base_airport_iata = self.urlvars.get('base_airport_iata', None)
+        base_airport_icao = self.urlvars.get('base_airport_icao', None)
 
         dest_airport_iata = self.urlvars.get('dest_airport_iata', None)
+        dest_airport_icao = self.urlvars.get('dest_airport_icao', None)
         if (dest_airport_iata is not None):
             dest_airport_iata = re.split('[;,]', dest_airport_iata)
+        elif (dest_airport_icao is not None):
+            dest_airport_icao = re.split('[;,]', dest_airport_icao)
             
         # remove trailing slashes from PATH_INFO
         path = re.sub(r"\/+$", "", self.request.path)
@@ -66,7 +71,8 @@ class Flights(Controller):
         # if we get /flight_number/basic, we return only top level data, not
         # a list of full flight details
         basic_only = False
-        basic_only = (flight_id is None and re.match(r"basic", path.split("/")[-1:][0]))
+        basic_only = (flight_id is None and re.match(r"basic", 
+                                                     path.split("/")[-1:][0]))
 
         # if flight_number == 'MTX':
             # data = self.getMaintenance()
@@ -80,9 +86,10 @@ class Flights(Controller):
         if not game_id or not num.match(game_id):
             # bad request; missing game_id and/or other vars
             self.resp.status = 400
-        elif base_airport_iata is not None:
+        elif base_airport_iata is not None or base_airport_icao is not None:
             return self.__getBaseFlightData(game_id, base_airport_iata,
-                fleet_type_id, dest_airport_iata)
+                base_airport_icao, fleet_type_id, dest_airport_iata,
+                dest_airport_icao)
         elif (flight_id is not None or flight_number is not None):
             return self.__getFlightData(game_id, flight_id, flight_number,
                 basic_only)
@@ -123,9 +130,12 @@ class Flights(Controller):
         
         return mtx_entry
 
-    def __getBaseFlightData(self, game_id, base_airport_iata, fleet_type_id,
-        dest_airport_iata):
-        """retrieves flight and fleet type data for all available flights """
+    """
+    retrieves flight and fleet type data for all available flights
+    """
+    def __getBaseFlightData(self, game_id, base_airport_iata, 
+                            base_airport_icao, fleet_type_id, 
+                            dest_airport_iata, dest_airport_icao):
         """for a given game_id/base_airport_iata pair"""
         data = OrderedDict([('flights', []), ])
 
@@ -134,10 +144,21 @@ class Flights(Controller):
             ft_condition = "AND f.fleet_type_id IN ({})".format(
                 ", ".join(fleet_type_id))
         
+        base_condition = ""
+        if (base_airport_iata is not None):
+            base_condition = "AND r.base_airport_iata = '{}'".format(
+                base_airport_iata)
+        else:
+            base_condition = "AND a.icao_code = '{}'".format(
+                base_airport_icao)
+
         dest_cond = ""
         if (dest_airport_iata is not None):
             dest_cond = "AND r.dest_airport_iata IN ('{}')".format(
                 "', '".join(dest_airport_iata))
+        elif (dest_airport_icao is not None):
+            dest_cond = "AND aa.icao_code IN ('{}')".format(
+                "', '".join(dest_airport_icao))
                 
         self.getFleetTypes()
 
@@ -163,7 +184,7 @@ class Flights(Controller):
             WHERE f.route_id = r.route_id 
             AND f.game_id = g.game_id 
             AND f.game_id = '{}' 
-            AND r.base_airport_iata = '{}' 
+            {} 
             {}
             AND f.turnaround_length is not null 
             AND a.iata_code = r.base_airport_iata 
@@ -173,7 +194,7 @@ class Flights(Controller):
             AND g.deleted = 'N' 
             {}
             ORDER BY dest_city, dest_airport_name, number
-            """.format(game_id, base_airport_iata, ft_condition, dest_cond)
+            """.format(game_id, base_condition, ft_condition, dest_cond)
         #print(query)
 
         flight_fields = [
@@ -243,7 +264,7 @@ class Flights(Controller):
                     game_id, timetable_id, self.content_type)
                     
         # if we got some flights, add MTX at list start
-        if dest_airport_iata is None:
+        if dest_airport_iata is None and dest_airport_icao is None:
             mtx = self.getMaintenance(game_id)
             mtx['base_airport_iata'] = base_airport_iata
 
@@ -260,53 +281,56 @@ class Flights(Controller):
             
            
         # get the last modification date
-        query = """
-        SELECT MAX(f.date_added) AS last_modified
-        FROM flights f, routes r
-        WHERE f.game_id = {}
-        AND r.route_id = f.route_id
-        AND r.base_airport_iata = '{}'
-        AND f.deleted = 'N'
-        """.format(game_id, base_airport_iata)
-        cursor.execute(query)
-        lastm = cursor.fetchone()
+#        query = """
+#        SELECT MAX(f.date_added) AS last_modified
+#        FROM flights f, routes r
+#        WHERE f.game_id = {}
+#        AND r.route_id = f.route_id
+#        AND r.base_airport_iata = '{}'
+#        AND f.deleted = 'N'
+#        """.format(game_id, base_airport_iata)
+#        cursor.execute(query)
+#        lastm = cursor.fetchone()
+#        print(lastm)
 
-        self.resp.last_modified = lastm['last_modified'].timestamp()
+        #self.resp.last_modified = lastm['last_modified'].timestamp()
         self.resp_data = data
         #print(data)
 
         return self.send()
 
 
+    """
+    retrieves flight/fleet type data for flight_id or flight number
+    For searches by flight number:
+
+    If basic is set, then only one dict is returned per flight, with the
+    following fields:
+        base_airport_iata
+        dest_airport_iata
+        distance_nm
+        fleet_type_id
+        flight_number
+        game_id
+        inbound_length
+        outbound_length
+        turnaround_length
+        sectors (if valid)
+        timetable_id (if valid)
+
+    If basic is not set, one dict is returned for each flight matching the
+    flight numbers, and the following fields are also included with the
+    previous set:
+        flight_id,
+        outbound_dep_time,
+        outbound_arr_time,
+        inbound_dep_time,
+        inbound_arr_time,
+        days_flown
+
+    Requests using flight_id always returns the complete set of data
+    """
     def __getFlightData(self, game_id, flight_id, flight_number, basic):
-        """retrieves flight/fleet type data for flight_id or flight number
-        For searches by flight number:
-
-        If basic is set, then only one dict is returned per flight, with the
-        following fields:
-            base_airport_iata
-            dest_airport_iata
-            distance_nm
-            fleet_type_id
-            flight_number
-            game_id
-            inbound_length
-            outbound_length
-            turnaround_length
-            sectors (if valid)
-            timetable_id (if valid)
-
-        If basic is not set, one dict is returned for each flight matching the
-        flight numbers, and the following fields are also included with the
-        previous set:
-            flight_id,
-            outbound_dep_time,
-            outbound_arr_time,
-            inbound_dep_time,
-            inbound_arr_time,
-            days_flown
-
-        Requests using flight_id always returns the complete set of data"""
 
         self.getFleetTypes()
 
@@ -401,7 +425,7 @@ class Flights(Controller):
         {}
         ORDER BY number
         """.format(qr_frag0, qr_frag1, game_id, condition, qr_frag2)
-        #print(query)
+        print(query)
 
         cursor = self.get_cursor()
         cursor.execute(query)
@@ -553,8 +577,10 @@ class Flights(Controller):
 
         return actual_sectors
 
+    """
+    get timetable_id values for all provided flight numbers
+    """
     def getTimetableData(self, game_id, candidates):
-        """get timetable_id values for all provided flights"""
         timetables = {}
 
         if len(candidates) == 0:
@@ -595,6 +621,10 @@ class Flights(Controller):
 
         return timetables        
 
+    
+    """
+    return flight numbers for all active flights
+    """
     def __getFlightHeaders(self, game_id, basic):
         if basic:
             return self.__getFlightData(game_id, None, None, basic)
@@ -642,21 +672,24 @@ class Flights(Controller):
 
         return self.send()
 
-
+    """
+    permits deletion of a single flight_id or flight_number, or a
+    list of either, with comma or semi-colon as separator
+    
+    /flights/AV001
+    /flights/AV001;AV291
+    /flights/10229
+    /flights/10229;29102
+    
+    delete flights from a base:
+    /flights/LHR    // all from LHR
+    /flights/LHR/37 // all fleet type 37 at LHR
+    /flights/EGLL    // all from EGLL
+    /flights/EGLL/37 // all fleet type 37 at EGLL
+    
+    """
     def delete(self):
-        """permits deletion of a single flight_id or flight_number, or a
-        list of either, with comma or semi-colon as separator
-        
-        /flights/AV001
-        /flights/AV001;AV291
-        /flights/10229
-        /flights/10229;29102
-        
-        delete flights from a base:
-        /flights/LHR    // all from LHR
-        /flights/LHR/37 // all fleet type at LHR
-        
-        """
+
         cursor = self.get_cursor()
 
         # mandatory
@@ -666,11 +699,12 @@ class Flights(Controller):
         flight_number = self.urlvars.get('flight_number', None)
         flight_id = self.urlvars.get('flight_id', None)
         base_airport_iata = self.urlvars.get('base_airport_iata', None)
+        base_airport_icao = self.urlvars.get('base_airport_icao', None)
         
         if (not game_id or 
-        (flight_number is None 
-        and flight_id is None 
-        and base_airport_iata is None)):
+            (flight_number is None 
+            and flight_id is None 
+            and base_airport_iata is None and base_airport_icao is None)):
             # bad request; missing game_id and/or other vars
             self.resp.status = 400
             return self.send()
@@ -691,11 +725,16 @@ class Flights(Controller):
                 
             digits = [x.group(2) for x in nums]
             condition = "AND (number IN ({}))".format(", ".join(digits))
-        elif (base_airport_iata is not None):
-            if not re.match(r"^[A-Z]{3}$", base_airport_iata):
-                err = "Invalid base airport code:" + base_airport_iata
-                return self.error(400, err)               
-            condition = "AND base_airport_iata = '{}'".format(base_airport_iata)
+        elif (base_airport_iata is not None or base_airport_icao is not None):
+            #if not re.match(r"^[A-Z]{3}$", base_airport_iata):
+            #    err = "Invalid base airport code: " + base_airport_iata
+            #    return self.error(400, err)
+            if base_airport_iata is not None:
+                condition = "AND base_airport_iata = '{}'".format(
+                        base_airport_iata)
+            else:
+                condition = "AND a.icao_code = '{}'".format(
+                        base_airport_icao)
         
             fleet_type_id = self.urlvars.get('fleet_type_id', None)
             if fleet_type_id is not None:
@@ -707,9 +746,10 @@ class Flights(Controller):
         query = """
         SELECT flight_id, flight_number, r.base_airport_iata,
         r.dest_airport_iata
-        FROM flights f, routes r
+        FROM flights f, routes r, airports a
         WHERE f.game_id = {}
         AND f.route_id = r.route_id
+        AND a.iata_code = r.base_airport_iata
         AND deleted = 'N'
         {}""".format(game_id, condition)
         cursor.execute(query)
@@ -751,11 +791,12 @@ class Flights(Controller):
         return self.createFlight(game_id, flight_id, data)
 
 
+    """
+        works in two (2) modes:
+        * flight_id <> None, data = flight dict array, length 1
+        * flight_id == None, data = flight dict array, length > 1
+    """
     def createFlight(self, game_id, flight_id, fData):
-        """works in two (2) modes:
-            * flight_id <> None, data = flight dict array, length 1
-            * flight_id == None, data = flight dict array, length > 1
-        """
         cursor = self.get_cursor()
 
         if (not game_id or not isinstance(fData, list) or len(fData) < 1):
@@ -975,16 +1016,16 @@ class Flights(Controller):
 
         return (True, None)
 
-    def getFleetTypes(self):
-        self.fleet_type_map = {}
-
-        query = "SELECT * FROM fleet_types"
-
-        cursor = self.get_cursor()
-        cursor.execute(query)
-
-        for row in cursor:
-            self.fleet_type_map[row['fleet_type_id']] = row
+#    def getFleetTypes(self):
+#        self.fleet_type_map = {}
+#
+#        query = "SELECT * FROM fleet_types"
+#
+#        cursor = self.get_cursor()
+#        cursor.execute(query)
+#
+#        for row in cursor:
+#            self.fleet_type_map[row['fleet_type_id']] = row
 
     def addFleetType(self, fleet_type_id, fleet_type, min_turnaround):
         pass

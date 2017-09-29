@@ -1,4 +1,6 @@
 import pymysql
+from warnings import filterwarnings
+filterwarnings('ignore', category = pymysql.Warning)
 
 class AirwaysimDB:
     """create single threaded mysql db cursor"""

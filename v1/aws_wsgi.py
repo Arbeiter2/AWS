@@ -66,18 +66,30 @@ def application(environ, start_response):
     # GET, POST - collection
     '/games/@game_id:\d+@/flights', 
     '/games/@game_id:\d+@/flights/basic', 
+    
     # GET, DELETE - flight_number
-    '/games/@game_id:\d+@/flights/@flight_number:MTX|([A-Z]{2}|[A-Z]\d|\d[A-Z])\d+([;,]([A-Z]{2}|[A-Z]\d|\d[A-Z])\d+)*@',
-    '/games/@game_id:\d+@/flights/@flight_number:MTX|([A-Z]{2}|[A-Z]\d|\d[A-Z])\d+([;,]([A-Z]{2}|[A-Z]\d|\d[A-Z])\d+)*@/basic',
+    '/games/@game_id:\d+@/flights/@flight_number:MTX|([A-Z]{2,3}|[A-Z]\d|\d[A-Z])\d+([;,]([A-Z]{2}|[A-Z]\d|\d[A-Z])\d+)*@',
+    '/games/@game_id:\d+@/flights/@flight_number:MTX|([A-Z]{2,3}|[A-Z]\d|\d[A-Z])\d+([;,]([A-Z]{2}|[A-Z]\d|\d[A-Z])\d+)*@/basic',
+    
     # GET, DELETE - flight_id
     '/games/@game_id:\d+@/flights/@flight_id:\d+([;,]\d+)*@', 
+    
     # GET, DELETE - base airport
+    # airport IATA code
     '/games/@game_id:\d+@/flights/@base_airport_iata:[A-Z]{3}@',
     '/games/@game_id:\d+@/flights/@base_airport_iata:[A-Z]{3}@/basic',
-    # baae airport and fleet_type_id
     '/games/@game_id:\d+@/flights/@base_airport_iata:[A-Z]{3}@/@fleet_type_id:\d+([;,]\d+)*@',
-     # baae airport and fleet_type_id
+    
+    # airport ICAO code
+    '/games/@game_id:\d+@/flights/@base_airport_icao:[A-Z]{4}@',
+    '/games/@game_id:\d+@/flights/@base_airport_icao:[A-Z]{4}@/basic',# baae airport and fleet_type_id
+    '/games/@game_id:\d+@/flights/@base_airport_icao:[A-Z]{4}@/@fleet_type_id:\d+([;,]\d+)*@',
+    
+    # base airport and fleet_type_id
+    # airport IATA code
     '/games/@game_id:\d+@/flights/@base_airport_iata:[A-Z]{3}@/@dest_airport_iata:[A-Z]{3}([;,][A-Z]{3})*@',
+    # airport ICAO code
+    '/games/@game_id:\d+@/flights/@base_airport_icao:[A-Z]{4}@/@dest_airport_icao:[A-Z]{4}([;,][A-Z]{4})*@',
     ],
     controller=aws_flights.FlightController)
 
