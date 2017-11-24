@@ -57,12 +57,18 @@ class Games(Controller):
             return self.error(400)
             
         res = []
+        game_id_list = "', '".join(re.split(r"[;,]", game_id))
 
         query = """
-        SELECT game_id, name
-        FROM games 
-        WHERE game_id IN ('{}') 
-        AND deleted = 'N'""".format("', '".join(re.split(r"[;,]", game_id)))
+        SELECT g.game_id, g.name as game_name, a.name as airline_name, 
+        base_airport_iata, a.iata_code, a.icao_code
+        FROM games g LEFT JOIN 
+        (SELECT * FROM airlines WHERE game_id IN ('206') AND deleted = 'N') a 
+        ON g.game_id = a.game_id
+        WHERE g.game_id IN ('206') 
+        AND g.deleted = 'N'
+        """.format(game_id_list, game_id_list)
+        print(query)
         cursor = self.get_cursor()
         cursor.execute(query)
         if cursor.rowcount <= 0:
@@ -71,21 +77,28 @@ class Games(Controller):
         # base data
         for row in cursor:
             out = OrderedDict()
-            out['name'] = row['name']
             out['game_id'] = row['game_id']
+            out['game_name'] = row['game_name']
+            out['airline_name'] = row['airline_name']
+            out['base_airport_iata'] = row['base_airport_iata']
+            out['iata_code'] = row['iata_code']
+            out['icao_code'] = row['icao_code']
             
             out['bases'] = "{}/games/{}/bases.{}".format(
-                self.request.application_url, row['game_id'], self.content_type)
+                self.request.application_url, row['game_id'], 
+                self.content_type)
             out['bases_href'] = out['bases']
 
             # flight data
             out['flights'] = "{}/games/{}/flights.{}".format(
-                    self.request.application_url, row['game_id'], self.content_type)
+                    self.request.application_url, row['game_id'], 
+                    self.content_type)
             out['flights_href'] = out['flights']
             
             # timetable data
             out['timetables'] = "{}/games/{}/timetables.{}".format(
-                    self.request.application_url, row['game_id'], self.content_type)
+                    self.request.application_url, row['game_id'], 
+                    self.content_type)
                     
             out['timetables_href'] = out['timetables']        
 
@@ -93,7 +106,10 @@ class Games(Controller):
 
         self.html_template = [{"table_name" : "games", 
         "entity" : "game",
-            "fields" : ["game_id", "name", "bases", "flights", "timetables"],
+            "fields" : ["game_id", "game_name", "airline_name", 
+                        "base_airport_iata",
+                        "iata_code", "icao_code", "bases", "flights", 
+                        "timetables"],
             "stacked_headers" : True}]
 
         self.resp_data = { "games" : res }
@@ -126,23 +142,29 @@ class Games(Controller):
             'icao_code_href', 'city', 'airport_name',  'timezone' ]
 
         query = '''
-		SELECT qw.game_id, qw.name, qw.iata_code, 
-		a.icao_code, a.timezone, a.city, a.airport_name,
-		TIME_FORMAT(c.start, '%H:%i') AS curfew_start,
-		TIME_FORMAT(c.finish, '%H:%i') AS curfew_finish
-		FROM airports a LEFT JOIN airport_curfews c
-		ON a.icao_code = c.icao_code,
-		(SELECT DISTINCT g.game_id, g.name, r.{}_airport_iata as iata_code
-		FROM games g, routes r, flights f
-		WHERE g.deleted = 'N'
-		AND f.deleted = 'N'
-		AND r.game_id = f.game_id
-		AND r.route_id = f.route_id
-		AND r.game_id = g.game_id
-        {}) qw
-		WHERE qw.iata_code = a.iata_code
-		ORDER BY name, city
+SELECT DISTINCT qw.game_id, qw.name, qw.iata_code,
+a.icao_code, a.timezone, a.city, a.airport_name,
+TIME_FORMAT(c.start, '%H:%i') AS curfew_start,
+TIME_FORMAT(c.finish, '%H:%i') AS curfew_finish
+FROM airports a LEFT JOIN airport_curfews c
+ON a.icao_code = c.icao_code,
+(SELECT DISTINCT g.game_id, g.name, r.{}_airport_iata as iata_code
+FROM games g, routes r, flights f
+WHERE g.deleted = 'N'
+AND f.deleted = 'N'
+AND r.game_id = f.game_id
+AND r.route_id = f.route_id
+AND r.game_id = g.game_id
+UNION 
+SELECT DISTINCT al.game_id, g.name, al.base_airport_iata as iata_code
+FROM games g, airlines al
+WHERE g.deleted = 'N'
+AND g.game_id = al.game_id) qw
+WHERE qw.iata_code = a.iata_code
+{}
+ORDER BY name, city
         '''.format(mode, condition)
+        #print(query)
         cursor.execute(query)
         rows = cursor.fetchall()
 
@@ -306,14 +328,27 @@ class Games(Controller):
         
         return self.send()
                 
+    """
+    Create or update an existing game
+    """
     def post(self):
-        data = json.loads(self.request.body)
+        mode = self.urlvars.get('mode', None)
+        if mode == 'airline':
+            return self.post_airline()
+
+        data = self.getJSON() #json.loads(self.request.body)
+        if data is None:
+            return self.error(400, "Malformed JSON")
         
         #if (not self.request.params['game_id'] or int(self.request.params['game_id']) <= 0 or not 'name' in self.request.params):
-        if (int(data.get('game_id', '0')) <= 0 or not data.get('name', None)
-           or not data.get('iata_code', None)):
-            return self.error(400, "JSON requires game_id, name, iata_code")
-
+        if (int(data.get('game_id', '0')) <= 0 
+         or not data.get('game_name', None)
+         or not data.get('iata_code', None)):
+            return self.error(400, "JSON missing fields")
+        
+        if not re.match('^([A-Z]{2}|[A-Z]\d|\d[A-Z])$', data['iata_code']):
+            return self.error(400, "Invalid iata_code")
+        
         query = '''
             INSERT IGNORE INTO games (game_id, name, iata_code) 
             VALUES ('{}', '{}', '{}')
@@ -321,8 +356,7 @@ class Games(Controller):
             name=VALUES(name),
             iata_code=VALUES(iata_code),
             deleted='N'
-            '''.format(
-            data['game_id'], data['name'], data['iata_code'])
+            '''.format(data['game_id'], data['game_name'], data['iata_code'])
             
         try:
             cursor = self.get_cursor()
@@ -335,10 +369,158 @@ class Games(Controller):
         self.resp_data = data
         
         return self.send()
+    
+    
+    def put(self):
+        mode = self.urlvars.get('mode', None)
+        if mode == 'airline':
+            return self.put_airline()
 
+        data = self.getJSON() #json.loads(self.request.body)
+        if data is None:
+            return self.error(400, "Malformed JSON")
 
+        if mode == 'airline':
+            return self.put_airline()
+        else:
+            return self.post()
+            
+
+    """
+    Update airline derails for rebranding
+    
+    Only airline namm and IATA/ICAO codes can be changed
+    """
+    def put_airline(self):
+        data = self.getJSON() #json.loads(self.request.body)
+        if data is None:
+            return self.error(400, "Malformed JSON")
+        
+        game_id = int(data.get('game_id', '0'))
+        if game_id <= 0:
+            return self.error(400, "Invalid game_id")
+        
+        # check whether there is already an active airline
+        cursor = self.get_cursor()
+        query = """
+        SELECT airline_id
+        FROM games g LEFT JOIN airlines a
+        ON g.game_id = a.game_id
+        WHERE g.game_id = {}
+        AND g.deleted = 'N'
+        AND a.deleted = 'N'
+        """.format(game_id)
+        #print(query)
+
+        cursor.execute(query)
+        res = cursor.fetchone()
+
+        if res is None:
+            return self.post_airline()
+        
+        if not re.match('\S+', data.get('airline_name', '')):
+            return self.error(400, "Invalid JSON field airline_name")
+        if not re.match(r'^([A-Z]{2}|\d[A-Z]|[A-Z]\d)$', 
+            data.get('iata_code', '')):
+            return self.error(400, "Invalid airline iata_code")
+        if not re.match(r'^[A-Z]{3}$', data.get('icao_code', '')):
+            return self.error(400, "Invalid airline icao_code")
+        
+        query = '''
+        UPDATE airlines 
+        SET name = '{}', 
+        iata_code = '{}', 
+        icao_code = '{}' 
+        WHERE game_id = {}
+        AND deleted = 'N'
+        '''.format(data['airline_name'], 
+                   data['iata_code'], data['icao_code'], game_id)
+            
+        try:
+            cursor.execute(query)
+        except Exception as e:
+            return self.error(500, str(e))
+            
+        self.db.commit()
+        self.resp_data = data
+        
+        return self.send()
+    
+    """
+    Create new airline from request body contents. 
+    
+    Fail if complete data unavailable, or there is already an airline for
+    this game
+    """
+    def post_airline(self):
+        data = self.getJSON()
+        if data is None:
+            return self.error(400, "Malformed JSON")
+
+        game_id = int(data.get('game_id', '0'))
+        if game_id <= 0:
+            return self.error(400, "Invalid game_id")
+        
+        # check whether there is already an active airline
+        cursor = self.get_cursor()
+        query = """
+        SELECT airline_id
+        FROM games g LEFT JOIN 
+        (SELECT * FROM airlines WHERE game_id = {} AND deleted = 'N') a 
+        ON g.game_id = a.game_id
+        WHERE g.game_id = {}
+        AND g.deleted = 'N'
+        """.format(game_id, game_id)
+        #print(query)
+
+        cursor.execute(query)
+        res = cursor.fetchone()
+
+        if res is None:
+            return self.error(404,"Unknown game_id {}".format(game_id))
+        if res['airline_id'] is not None:
+            return self.error(409, "Airline already exists")
+        
+        if not re.match('\S+', data.get('airline_name', '')):
+            return self.error(400, "Invalid JSON field airline_name")
+        if not re.match(r'^([A-Z]{2}|\d[A-Z]|[A-Z]\d)$', 
+            data.get('iata_code', '')):
+            return self.error(400, "Invalid airline iata_code")
+        if not re.match(r'^[A-Z]{3}$', data.get('icao_code', '')):
+            return self.error(400, "Invalid airline icao_code")
+        if not re.match(r'^[A-Z]{3}$', data.get('base_airport_iata', '')):
+            return self.error(400, "Invalid base_airport_iata")
+
+        
+        query = '''
+        INSERT INTO airlines (game_id, name, base_airport_iata,
+        iata_code, icao_code) 
+        VALUES ({}, '{}', '{}', '{}', '{}')
+        '''.format(game_id, data['airline_name'], 
+            data['base_airport_iata'], data['iata_code'], data['icao_code'])
+            
+        try:
+            cursor.execute(query)
+        except Exception as e:
+            return self.error(500, str(e))
+            
+        self.db.commit()
+        self.resp_data = data
+        
+        return self.send()
+
+    """
+    Delete either game or airline
+    """
     def delete(self):
         game_id = int(self.urlvars['game_id'])
+        mode = self.urlvars.get('mode', None)
+
+        airline_only = (mode == 'airline')
+        if airline_only:
+            table = "airlines"
+        else:
+            table = "games"
         
         # bomb if no game_id
         if (game_id < 0):
@@ -347,10 +529,10 @@ class Games(Controller):
         cursor = self.get_cursor()
 
         query = '''
-        UPDATE games 
+        UPDATE {} 
         SET deleted = 'Y' 
         WHERE game_id = {}
-        '''.format(game_id)
+        '''.format(table, game_id)
         cursor.execute(query)
         
         if (cursor.rowcount > 0):
